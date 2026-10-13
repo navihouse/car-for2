@@ -1,0 +1,27 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "STM32Cube: Launch ST-Link GDB Server (Debug)",
+            "type": "stlinkgdbtarget",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "Build STM32 (Debug)",
+            "preBuild": "",
+            "deviceName": "STM32F103C8T6",
+            "deviceCore": "Cortex-M3",
+            "deviceTrustzone": "TZ-disabled",
+            "runEntry": "main",
+            "gdb": "${env:LOCALAPPDATA}/stm32cube/bundles/gnu-gdb-for-stm32/14.3.1+st.2/bin/arm-none-eabi-gdb.exe",
+            "serverExe": "ST-LINK_gdbserver.exe",
+            "serverCubeProgPath": "${env:LOCALAPPDATA}/stm32cube/bundles/programmer/2.23.0/bin",
+            "imagesAndSymbols": [
+                {
+                    "imageFileName": "${workspaceFolder}/build/Debug/car-for2.elf",
+                    "symbolFileName": "${workspaceFolder}/build/Debug/car-for2.elf"
+                }
+            ],
+            "serverCwd": "${env:LOCALAPPDATA}/stm32cube/bundles/stlink-gdbserver/7.14.0+st.2/bin"
+        }
+    ]
+}
