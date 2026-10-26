@@ -1,9 +1,0 @@
-D:/STM32project/car-for2/Core/Src/car_control.c:5:16:Clamp	24	static
-D:/STM32project/car-for2/Core/Src/car_control.c:10:6:CarControl_Stop	16	static
-D:/STM32project/car-for2/Core/Src/car_control.c:20:6:CarControl_Init	104	static
-D:/STM32project/car-for2/Core/Src/car_control.c:31:13:UpdateMarker	24	static
-D:/STM32project/car-for2/Core/Src/car_control.c:44:17:SpeedPi	40	static
-D:/STM32project/car-for2/Core/Src/car_control.c:67:13:SetTargets	24	static
-D:/STM32project/car-for2/Core/Src/car_control.c:91:13:TrackLine	64	static
-D:/STM32project/car-for2/Core/Src/car_control.c:150:6:CarControl_Update	32	static
-D:/STM32project/car-for2/Core/Src/car_control.c:260:13:CarControl_StateName	16	static

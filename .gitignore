@@ -1,0 +1,5 @@
+/build/
+/backups/
+/logs/
+mx.scratch
+!.settings

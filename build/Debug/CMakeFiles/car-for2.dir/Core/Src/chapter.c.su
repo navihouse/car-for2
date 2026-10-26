@@ -1,9 +1,0 @@
-D:/STM32project/car-for2/Core/Src/chapter.c:15:16:ReadKeys	16	static
-D:/STM32project/car-for2/Core/Src/chapter.c:25:13:ReadMarker	24	static
-D:/STM32project/car-for2/Core/Src/chapter.c:36:16:ReadBlackMask	24	static
-D:/STM32project/car-for2/Core/Src/chapter.c:58:17:ScaledDuty	24	static
-D:/STM32project/car-for2/Core/Src/chapter.c:68:13:MotorApply	24	static
-D:/STM32project/car-for2/Core/Src/chapter.c:84:13:EncoderInit	16	static
-D:/STM32project/car-for2/Core/Src/chapter.c:99:13:HardwareInit	80	static
-D:/STM32project/car-for2/Core/Src/chapter.c:194:13:RenderDisplay	72	static
-D:/STM32project/car-for2/Core/Src/chapter.c:220:6:chapter_main	88	static

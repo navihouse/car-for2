@@ -1,4 +1,0 @@
-D:/STM32project/car-for2/Core/Src/odometry.c:5:16:CounterDelta	24	static
-D:/STM32project/car-for2/Core/Src/odometry.c:11:6:Odometry_Init	72	static
-D:/STM32project/car-for2/Core/Src/odometry.c:21:6:Odometry_ResetTrip	64	static
-D:/STM32project/car-for2/Core/Src/odometry.c:32:6:Odometry_Update	248	static

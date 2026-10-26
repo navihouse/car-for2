@@ -19,7 +19,7 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # Set the project name
-set(CMAKE_PROJECT_NAME car-for2)
+set(CMAKE_PROJECT_NAME C10B_Test)
 
 # Enable compile command to ease indexing with e.g. clangd
 set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
@@ -45,11 +45,6 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
-    Core/Src/chapter.c
-    Core/Src/car_control.c
-    Core/Src/buttons.c
-    Core/Src/odometry.c
-    Core/Src/oled.c
 )
 
 # Add include paths
@@ -71,15 +66,39 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 
     # Add user defined libraries
 )
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+    Core/Src/Modules/motor.c
+    Core/Src/Modules/encoder.c
+    Core/Src/Modules/speed_control.c
+    Core/Src/Modules/button.c
+    Core/Src/Modules/oled.c
+    Core/Src/Modules/line_sensor.c
+    Core/Src/Modules/line_calibration.c
+    Core/Src/Modules/line_calibration_store.c
+)
 
-# Generate both common flashing formats beside the ELF file.
-add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_OBJCOPY} -O ihex
-            $<TARGET_FILE:${CMAKE_PROJECT_NAME}>
-            $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/${CMAKE_PROJECT_NAME}.hex
-    COMMAND ${CMAKE_OBJCOPY} -O binary
-            $<TARGET_FILE:${CMAKE_PROJECT_NAME}>
-            $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/${CMAKE_PROJECT_NAME}.bin
-    COMMENT "Generating HEX and BIN firmware"
-    VERBATIM
+target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
+    Core/Src/Mission
+    Core/Src/Modules
+)
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+    Core/Src/Modules/imu_heading.c
+    Core/Src/Modules/imu_mpu6050.c
+)
+set(MISSION_MODE "FULL" CACHE STRING "Route to build: FULL, AC, CB, BD, DA")
+set_property(CACHE MISSION_MODE PROPERTY STRINGS FULL AC CB BD DA)
+set(_mission_modes FULL AC CB BD DA)
+list(FIND _mission_modes "${MISSION_MODE}" _mission_mode_id)
+if(_mission_mode_id EQUAL -1)
+    message(FATAL_ERROR "MISSION_MODE must be FULL, AC, CB, BD or DA")
+endif()
+target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE MISSION_BUILD_MODE=${_mission_mode_id})
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+    Core/Src/Mission/mission.c
+    Core/Src/Mission/mission_control.c
+    Core/Src/Mission/mission_port_stm32.c
+    Core/Src/Mission/segment_ac.c
+    Core/Src/Mission/segment_cb.c
+    Core/Src/Mission/segment_bd.c
+    Core/Src/Mission/segment_da.c
 )

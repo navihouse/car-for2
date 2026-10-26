@@ -23,6 +23,16 @@
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release"
             }
+        },
+        {
+            "name": "Mission-Debug",
+            "inherits": "Debug",
+            "cacheVariables": { "MISSION_MODE": "FULL" }
+        },
+        {
+            "name": "Mission-Release",
+            "inherits": "Release",
+            "cacheVariables": { "MISSION_MODE": "FULL" }
         }
     ],
     "buildPresets": [
@@ -33,6 +43,8 @@
         {
             "name": "Release",
             "configurePreset": "Release"
-        }
+        },
+        { "name": "Mission-Debug", "configurePreset": "Mission-Debug" },
+        { "name": "Mission-Release", "configurePreset": "Mission-Release" }
     ]
 }

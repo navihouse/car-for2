@@ -1,6 +1,9 @@
 {
-    "device": "STM32F103C8T6",
-    "core": "Cortex-M3",
-    "tz": "TZ-disabled",
-    "toolchain": "GCC"
+  "source": {
+    "sourceType": "STM32CubeMX"
+  },
+  "device": "STM32F103RCT6",
+  "core": "Cortex-M3",
+  "order": 0,
+  "toolchain": "GCC"
 }

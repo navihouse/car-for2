@@ -8,7 +8,7 @@
             "cwd": "${workspaceFolder}",
             "preLaunchTask": "Build STM32 (Debug)",
             "preBuild": "",
-            "deviceName": "STM32F103C8T6",
+            "deviceName": "STM32F103RCT6",
             "deviceCore": "Cortex-M3",
             "deviceTrustzone": "TZ-disabled",
             "runEntry": "main",
@@ -17,8 +17,8 @@
             "serverCubeProgPath": "${env:LOCALAPPDATA}/stm32cube/bundles/programmer/2.23.0/bin",
             "imagesAndSymbols": [
                 {
-                    "imageFileName": "${workspaceFolder}/build/Debug/car-for2.elf",
-                    "symbolFileName": "${workspaceFolder}/build/Debug/car-for2.elf"
+                    "imageFileName": "${workspaceFolder}/build/Mission-Debug/C10B_Test.elf",
+                    "symbolFileName": "${workspaceFolder}/build/Mission-Debug/C10B_Test.elf"
                 }
             ],
             "serverCwd": "${env:LOCALAPPDATA}/stm32cube/bundles/stlink-gdbserver/7.14.0+st.2/bin"
