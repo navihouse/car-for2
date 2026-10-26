@@ -2,8 +2,9 @@
 #define SPEED_CONTROL_H
 
 #include <stdint.h>
-#define SPEED_CONTROL_MAX_CPS 3200U
-#define SPEED_CONTROL_TURN_MAX_CPS 1200U
+#include "motion_tuning.h"
+#define SPEED_CONTROL_MAX_CPS MOTION_MAX_CPS
+#define SPEED_CONTROL_TURN_MAX_CPS MOTION_TURN_MAX_CPS
 
 typedef enum
 {

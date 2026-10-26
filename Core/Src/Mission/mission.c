@@ -1,6 +1,7 @@
 #include "mission.h"
 #include "mission_port.h"
 #include "button.h"
+#include <math.h>
 
 volatile MissionDiagnostics mission_diag;
 static MissionControl control;
@@ -9,20 +10,32 @@ static Button_State button;
 static uint32_t press_ms, tracking, consumed, event_count, last_event_ms;
 static int32_t left_target, right_target;
 static uint32_t last_publish_ms;
-_Static_assert(sizeof(MissionDiagnostics) == 96U, "Update the mission dump decoder");
+static MissionMotionMode commanded_mode;
+_Static_assert(sizeof(MissionDiagnostics) == 144U, "Update the mission dump decoder");
+
+static int32_t DiagnosticNumber(float value)
+{
+    if (!isfinite(value)) return 0;
+    if (value>2147483000.0f) return INT32_MAX;
+    if (value< -2147483000.0f) return INT32_MIN;
+    return (int32_t)value;
+}
 
 static void Publish(uint32_t now)
 {
+    const MissionSegmentContext *ctx=&control.contexts[control.segment];
+    const MissionSegmentParams *params=control.segments[control.segment]->params;
     /* Leave a stable window for read-only SWD snapshots. State changes and
      * arrivals are still published in the same tick, independent of cadence. */
     if ((uint32_t)(now - last_publish_ms) < 20U &&
         mission_diag.state == (uint32_t)control.state && mission_diag.reason == (uint32_t)control.reason &&
         mission_diag.segment == (uint32_t)control.segment && mission_diag.event_count == event_count &&
         mission_diag.calibrating == snapshot.calibrating && mission_diag.speed_fault == snapshot.speed_fault &&
-        mission_diag.left_target_cps == left_target && mission_diag.right_target_cps == right_target) return;
+        mission_diag.left_target_cps == left_target && mission_diag.right_target_cps == right_target &&
+        mission_diag.phase==ctx->phase && mission_diag.motion_mode==(uint32_t)commanded_mode) return;
     uint32_t seq = (mission_diag.sequence_begin + 2U) & ~1U;
     MissionDiagnostics d = {
-        .magic = 0x4D534E31U, .version = 1U, .sequence_begin = seq - 1U,
+        .magic = 0x4D534E31U, .version = 2U, .sequence_begin = seq - 1U,
         .mode = control.mode, .state = control.state, .reason = control.reason,
         .segment = control.segment, .segment_fault = control.segment_fault,
         .uptime_ms = now, .arrivals = control.arrivals, .last_point = control.last_point,
@@ -30,7 +43,16 @@ static void Publish(uint32_t now)
         .left_target_cps = left_target, .right_target_cps = right_target,
         .speed_fault = snapshot.speed_fault, .gyro_ready = snapshot.gyro_ready, .gyro_age_ms = snapshot.gyro_age_ms,
         .line_calibrated = snapshot.line_calibrated, .line_age_ms = snapshot.line_age_ms,
-        .line_mask = snapshot.line_mask, .calibrating = snapshot.calibrating, .sequence_end = seq
+        .line_mask = snapshot.line_mask, .calibrating = snapshot.calibrating,
+        .phase=ctx->phase, .motion_mode=commanded_mode,
+        .distance_mm=DiagnosticNumber(ctx->motion.distance_mm),
+        .point_min_mm=DiagnosticNumber(params->point_min_mm), .point_max_mm=DiagnosticNumber(params->point_max_mm),
+        .target_yaw_mdeg=DiagnosticNumber(ctx->motion.target_yaw_deg*1000.0f),
+        .heading_error_mdeg=DiagnosticNumber(ctx->motion.heading_error_deg*1000.0f),
+        .line_position=DiagnosticNumber(ctx->motion.line_position),
+        .point_confirm_frames=ctx->motion.edge.candidate_frames, .turn_corrections=ctx->motion.corrections,
+        .nominal_mm=DiagnosticNumber(params->nominal_mm), .capture_frames=ctx->motion.capture_frames,
+        .sequence_end = seq
     };
     if (control.state == MISSION_RUNNING) d.elapsed_ms = now - control.started_ms;
     else if (control.run_started && (control.state == MISSION_DONE || control.state == MISSION_STOPPED || control.state == MISSION_FAULT))
@@ -42,9 +64,11 @@ static void Publish(uint32_t now)
 }
 static void Apply(MissionOutput out, uint32_t now)
 {
-    if (out.action == DRIVE_BEGIN) MissionPort_StartDrive(out.left_cps, out.right_cps, now);
-    else if (out.action == DRIVE_TARGET) MissionPort_SetTargets(out.left_cps, out.right_cps);
-    else if (out.action == DRIVE_STOP) MissionPort_StopDrive();
+    if (out.action == DRIVE_BEGIN || out.action == DRIVE_TARGET) {
+        MissionPort_Command(out.mode,out.left_cps,out.right_cps,now); commanded_mode=out.mode;
+    } else if (out.action == DRIVE_STOP) {
+        MissionPort_StopDrive(); commanded_mode=MOTION_BRAKE;
+    }
 
     if (out.action == DRIVE_BEGIN || out.action == DRIVE_TARGET) {
         left_target = (int32_t)out.left_cps;
@@ -73,6 +97,7 @@ void Mission_Init(uint32_t now)
     mission_diag = (MissionDiagnostics){0};
     tracking = consumed = event_count = last_event_ms = 0U;
     left_target = right_target = 0;
+    commanded_mode=MOTION_BRAKE;
     last_publish_ms = now - 20U;
     snapshot = MissionPort_Capture(now);
     Button_Init(&button, MissionPort_ButtonPressed(), now);

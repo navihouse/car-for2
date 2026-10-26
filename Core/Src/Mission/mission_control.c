@@ -1,11 +1,12 @@
 #include "mission_control.h"
+#include "motion_control.h"
 #include <math.h>
 #include <stddef.h>
 
 static const MissionPoint endpoints[SEGMENT_COUNT] = { POINT_C, POINT_B, POINT_D, POINT_A };
 static MissionOutput Output(MissionDriveAction action)
 {
-    return (MissionOutput){ .action = action };
+    return (MissionOutput){ .action = action, .mode = MOTION_BRAKE };
 }
 static uint8_t ValidDescriptor(const MissionSegment *s, uint32_t id)
 {
@@ -26,9 +27,12 @@ static MissionReason CheckInput(const MissionSegment *s, const MissionInput *in)
 }
 static uint8_t ValidTarget(MissionSegmentOutput out)
 {
-    /* Positive forward drive only. Final parking/stop is a controller action. */
-    return out.left_cps > 0.0f && out.left_cps <= MISSION_MAX_TARGET_CPS &&
-           out.right_cps > 0.0f && out.right_cps <= MISSION_MAX_TARGET_CPS;
+    if (out.mode==MOTION_BRAKE) return out.left_cps==0.0f && out.right_cps==0.0f;
+    if (out.mode==MOTION_TURN)
+        return ((out.left_cps<0.0f && out.right_cps>0.0f) || (out.left_cps>0.0f && out.right_cps<0.0f)) &&
+            fabsf(out.left_cps)<=MOTION_TURN_MAX_CPS && fabsf(out.right_cps)<=MOTION_TURN_MAX_CPS;
+    return out.mode==MOTION_FORWARD && out.left_cps>0.0f && out.left_cps<=MISSION_MAX_TARGET_CPS &&
+        out.right_cps>0.0f && out.right_cps<=MISSION_MAX_TARGET_CPS;
 }
 static void Exit(MissionControl *m, const MissionInput *in, MissionExitReason reason)
 {
@@ -59,13 +63,15 @@ static MissionOutput Accept(MissionControl *m, const MissionInput *in, MissionSe
     if (!ValidTarget(result)) return MissionControl_Fail(m, in, MISSION_BAD_TARGET, 0U);
     MissionOutput out = Output(action);
     out.left_cps = result.left_cps; out.right_cps = result.right_cps;
+    out.mode = result.mode;
     return out;
 }
 static MissionSegmentOutput Enter(MissionControl *m, const MissionInput *in)
 {
     const MissionSegment *s = m->segments[m->segment];
     MissionSegmentContext *ctx = &m->contexts[m->segment];
-    *ctx = (MissionSegmentContext){ .entry = *in, .active = 1U, .phase_started_ms = in->now_ms };
+    *ctx = (MissionSegmentContext){ .entry = *in, .active = 1U, .phase_started_ms = in->now_ms,
+        .course_origin_deg=m->course_origin_deg, .from_handoff=m->arrivals!=0U };
     return s->Enter(ctx, in, s->params);
 }
 MissionOutput MissionControl_Start(MissionControl *m, const MissionInput *in)
@@ -75,7 +81,7 @@ MissionOutput MissionControl_Start(MissionControl *m, const MissionInput *in)
     m->started_ms = m->ended_ms = m->run_started = 0U;
     uint32_t first = m->mode == MISSION_MODE_FULL ? 0U : m->mode - 1U;
     uint32_t end = m->mode == MISSION_MODE_FULL ? SEGMENT_COUNT : first + 1U;
-    if (m->mode > MISSION_MODE_DA) {
+    if (m->mode > MISSION_MODE_DA || !Motion_ValidateTuning()) {
         m->state = MISSION_REJECTED; m->reason = MISSION_BAD_CONFIG; return Output(DRIVE_STOP);
     }
     m->segment = (MissionSegmentId)first;
@@ -89,11 +95,21 @@ MissionOutput MissionControl_Start(MissionControl *m, const MissionInput *in)
             m->segment = (MissionSegmentId)i; m->state = MISSION_REJECTED;
             m->reason = MISSION_NOT_IMPLEMENTED; return Output(DRIVE_STOP);
         }
+        if (m->segments[i]->Validate && !m->segments[i]->Validate(m->segments[i]->params)) {
+            m->segment=(MissionSegmentId)i; m->state=MISSION_REJECTED;
+            m->reason=MISSION_BAD_CONFIG; return Output(DRIVE_STOP);
+        }
     }
     MissionReason reason = CheckInput(m->segments[first], in);
     if (reason != MISSION_OK) {
         m->state = MISSION_REJECTED; m->reason = reason; return Output(DRIVE_STOP);
     }
+    /* Standalone BD/DA face west; FULL/AC/CB face east. */
+    if (m->segments[first]->params->kind==MOTION_KIND_ARC && !in->line_mask) {
+        m->state=MISSION_REJECTED; m->reason=MISSION_LINE_UNAVAILABLE; return Output(DRIVE_STOP);
+    }
+    float initial_heading=(m->mode==MISSION_MODE_BD || m->mode==MISSION_MODE_DA) ? 180.0f : 0.0f;
+    m->course_origin_deg=in->yaw_deg-initial_heading/MOTION_YAW_SIGN;
     m->state = MISSION_RUNNING; m->started_ms = in->now_ms; m->run_started = 1U;
     MissionOutput out = Accept(m, in, Enter(m, in), DRIVE_BEGIN);
     /* An unexpected Enter failure must not energize the motors either. */
@@ -122,8 +138,8 @@ MissionOutput MissionControl_Update(MissionControl *m, const MissionInput *in)
         if (reason != MISSION_OK) out = MissionControl_Fail(m, in, reason, in->speed_fault);
         else out = Accept(m, in, Enter(m, in), DRIVE_TARGET);
     }
-    /* Incoming Enter consumes this SAME snapshot and supplies this tick's
-     * targets. No Stop/Start, zero target, reset or repeated arrival here. */
+    /* Same snapshot: C/D retain forward drive; B explicitly requests the
+     * approved stopped in-place-turn phase. */
     out.point = arrived;
     return out;
 }

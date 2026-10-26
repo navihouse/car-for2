@@ -1,5 +1,6 @@
 #ifndef ODOMETRY_CONFIG_H
 #define ODOMETRY_CONFIG_H
+#include "motion_tuning.h"
 /* Course calibration refined 2026-10-14 after one lap overshot by ~70 mm.
  * Same body reference at start/finish. Firmware run=37356 ms;
  * stop=L45258/R40570, settled=L45431/R40716, mean settled=43073.5.
@@ -11,8 +12,8 @@
  * straight ground calibration. No timed lap cutoff.
  * Previous scale 6.809345408 displayed 6325 mm for this run.
  */
-#define ODOMETRY_LEFT_COUNTS_PER_MM  6.730141612f
-#define ODOMETRY_RIGHT_COUNTS_PER_MM 6.730141612f
-/* Historical wheel scale retained for future per-segment ground calibration.
- * The new mission currently operates in counts and has no track-length default. */
+#define ODOMETRY_LEFT_COUNTS_PER_MM MOTION_LEFT_COUNTS_PER_MM
+#define ODOMETRY_RIGHT_COUNTS_PER_MM MOTION_RIGHT_COUNTS_PER_MM
+/* Compatibility aliases. Active distance control uses motion_tuning.h directly;
+ * no old mode-2 correction factor is applied on top of this wheel scale. */
 #endif

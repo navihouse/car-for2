@@ -1,5 +1,6 @@
 #ifndef MISSION_CONFIG_H
 #define MISSION_CONFIG_H
+#include "motion_tuning.h"
 
 /* CMake -DMISSION_MODE=FULL|AC|CB|BD|DA selects one firmware. */
 #define MISSION_MODE_FULL 0
@@ -14,7 +15,7 @@
 #error Invalid MISSION_BUILD_MODE
 #endif
 
-#define MISSION_MAX_TARGET_CPS 3200.0f
+#define MISSION_MAX_TARGET_CPS ((float)MOTION_MAX_CPS)
 #define MISSION_GYRO_MAX_AGE_MS 30U
 #define MISSION_LINE_MAX_AGE_MS 150U
 #define MISSION_CAL_HOLD_MS 6000U

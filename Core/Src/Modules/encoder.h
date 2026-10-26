@@ -2,8 +2,9 @@
 #define ENCODER_H
 
 #include <stdint.h>
+#include "motion_tuning.h"
 
-#define ENCODER_SAMPLE_PERIOD_MS 10U
+#define ENCODER_SAMPLE_PERIOD_MS MOTION_ENCODER_PERIOD_MS
 
 /* Raw counters are unchanged; deltas, totals and cps are normalized so
  * forward is positive on BOTH wheels (left +1, right -1, measured on car).

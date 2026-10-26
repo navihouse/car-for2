@@ -14,6 +14,7 @@ typedef struct {
     MissionDriveAction action;
     float left_cps, right_cps;
     MissionPoint point; /* One arrival per completed segment; none at launch. */
+    MissionMotionMode mode;
 } MissionOutput;
 typedef struct {
     MissionState state;
@@ -21,6 +22,7 @@ typedef struct {
     uint32_t mode, started_ms, ended_ms, run_started, segment_fault, arrivals;
     MissionSegmentId segment;
     MissionPoint last_point;
+    float course_origin_deg;
     const MissionSegment *segments[SEGMENT_COUNT];
     MissionSegmentContext contexts[SEGMENT_COUNT];
 } MissionControl;

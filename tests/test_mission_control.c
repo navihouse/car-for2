@@ -7,6 +7,8 @@
 static uint32_t enters, exits, updates;
 static MissionSegmentStatus enter_status, update_status;
 static float target;
+static float right_delta;
+static MissionMotionMode fake_mode;
 static MissionExitReason exit_reason;
 static MissionInput seen_entry;
 static MissionSegmentOutput FakeEnter(MissionSegmentContext *ctx, const MissionInput *in, const MissionSegmentParams *p)
@@ -14,12 +16,12 @@ static MissionSegmentOutput FakeEnter(MissionSegmentContext *ctx, const MissionI
     (void)p;
     assert(ctx->active && ctx->entry.left_counts == in->left_counts);
     ++enters; seen_entry = *in;
-    return (MissionSegmentOutput){enter_status, 17U, target, target + 20.0f};
+    return (MissionSegmentOutput){enter_status, 17U, target, target + right_delta, fake_mode};
 }
 static MissionSegmentOutput FakeUpdate(MissionSegmentContext *ctx, const MissionInput *in, const MissionSegmentParams *p)
 {
     (void)ctx; (void)in; (void)p; ++updates;
-    return (MissionSegmentOutput){update_status, 17U, target, target + 20.0f};
+    return (MissionSegmentOutput){update_status, 17U, target, target + right_delta, fake_mode};
 }
 static void FakeExit(MissionSegmentContext *ctx, const MissionInput *in, MissionExitReason reason)
 {
@@ -32,12 +34,13 @@ static MissionInput Fresh(uint32_t now)
 }
 static void Init(MissionControl *m, MissionSegment segments[4], const MissionSegment **table, uint32_t mode)
 {
-    static const MissionSegmentParams params = {500.0f, 10000U};
+    static const MissionSegmentParams params = {.cruise_cps=500.0f, .timeout_ms=10000U};
     enters = exits = updates = 0U; target=500.0f;
+    right_delta=20.0f; fake_mode=MOTION_FORWARD;
     enter_status=update_status=SEG_RUNNING;
     for (uint32_t i=0; i<4U; ++i) {
         segments[i]=(MissionSegment){(MissionSegmentId)i,1U,SENSOR_GYRO|SENSOR_LINE,
-            &params,FakeEnter,FakeUpdate,FakeExit}; table[i]=&segments[i];
+            &params,FakeEnter,FakeUpdate,FakeExit,NULL}; table[i]=&segments[i];
     }
     MissionControl_Init(m,mode,table);
 }
@@ -127,6 +130,17 @@ int main(void)
     Init(&m,s,table,MISSION_MODE_AC); s[0].required_sensors=SENSOR_GYRO;
     in.line_calibrated=0U; in.line_sequence=0U;
     assert(MissionControl_Start(&m,&in).action==DRIVE_BEGIN);
-    puts("mission control: route, continuous handoff, rejection, faults and rollover passed");
+    in=Fresh(300U); Init(&m,s,table,0U); fake_mode=MOTION_TURN;
+    target=-500.0f; right_delta=1000.0f; out=MissionControl_Start(&m,&in);
+    assert(out.action==DRIVE_BEGIN && out.mode==MOTION_TURN);
+    Init(&m,s,table,0U); fake_mode=MOTION_TURN;
+    out=MissionControl_Start(&m,&in); assert(out.action==DRIVE_STOP && m.reason==MISSION_BAD_TARGET);
+    Init(&m,s,table,0U); fake_mode=MOTION_BRAKE; target=right_delta=0.0f;
+    out=MissionControl_Start(&m,&in); assert(out.action==DRIVE_BEGIN && out.mode==MOTION_BRAKE);
+    Init(&m,s,table,0U); fake_mode=MOTION_BRAKE;
+    out=MissionControl_Start(&m,&in); assert(out.action==DRIVE_STOP && m.reason==MISSION_BAD_TARGET);
+    Init(&m,s,table,0U); fake_mode=(MissionMotionMode)99;
+    assert(MissionControl_Start(&m,&in).action==DRIVE_STOP);
+    puts("mission control: route, drive profiles, continuous handoff, rejection, faults and rollover passed");
     return 0;
 }

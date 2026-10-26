@@ -1,26 +1,16 @@
-#include "mission_segment.h"
+#include "motion_control.h"
 
-/* AC: tune this segment here when its control algorithm is added.
- * Entry/Update must only compute targets; Exit must never stop hardware. */
-static const MissionSegmentParams params = { .cruise_cps = 0.0f, .timeout_ms = 0U };
-static MissionSegmentOutput Enter(MissionSegmentContext *ctx, const MissionInput *in,
-                                  const MissionSegmentParams *config)
-{
-    (void)ctx; (void)in; (void)config;
-    return (MissionSegmentOutput){ .status = SEG_UNIMPLEMENTED };
-}
-static MissionSegmentOutput Update(MissionSegmentContext *ctx, const MissionInput *in,
-                                   const MissionSegmentParams *config)
-{
-    (void)ctx; (void)in; (void)config;
-    return (MissionSegmentOutput){ .status = SEG_UNIMPLEMENTED };
-}
-static void Exit(MissionSegmentContext *ctx, const MissionInput *in, MissionExitReason reason)
-{
-    (void)in; (void)reason;
-    ctx->active = 0U;
-}
+/* AC: independently tunable; shared controller owns no hardware. */
+static const MissionSegmentParams params = {
+    .kind=MOTION_KIND_STRAIGHT, .cruise_cps=MOTION_AC_CRUISE_CPS,
+    .timeout_ms=MOTION_DRIVE_TIMEOUT_MS,
+    .capture_cps=0.0f,
+    .target_yaw_deg=MOTION_AC_TARGET_DEG,
+    .nominal_mm=MOTION_AC_NOMINAL_MM,
+    .point_min_mm=MOTION_AC_POINT_MIN_MM, .point_max_mm=MOTION_AC_POINT_MAX_MM
+};
 const MissionSegment mission_segment_ac = {
-    .id = SEGMENT_AC, .implemented = 0U, .required_sensors = SENSOR_GYRO,
-    .params = &params, .Enter = Enter, .Update = Update, .Exit = Exit
+    .id=SEGMENT_AC, .implemented=1U, .required_sensors=SENSOR_GYRO|SENSOR_LINE,
+    .params=&params, .Enter=MotionStraight_Enter, .Update=MotionStraight_Update,
+    .Exit=Motion_Exit, .Validate=Motion_ValidateParams
 };

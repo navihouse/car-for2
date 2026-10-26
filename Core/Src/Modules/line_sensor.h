@@ -4,7 +4,8 @@
 
 /* V5: framed analog UART + host-side learning. 116 words / 464 bytes.
  * mask is SOFTWARE black detection (1=black), usable only with cal_valid
- * and fresh frames. Numbering S1..S8 is not vehicle left-to-right order.
+ * and fresh frames. MOTION_LINE_ORDER maps raw indices to vehicle left/right;
+ * its default restores the old line-follow profile and needs a car-side check.
  * Debugger reads are live snapshots. ISR owns RX counters; main publishes
  * complete analog samples and all calibration fields.
  */

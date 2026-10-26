@@ -97,6 +97,12 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/Mission/mission.c
     Core/Src/Mission/mission_control.c
     Core/Src/Mission/mission_port_stm32.c
+    Core/Src/Mission/motion_control.c
+    Core/Src/Mission/motion_distance.c
+    Core/Src/Mission/motion_edge.c
+    Core/Src/Mission/motion_straight.c
+    Core/Src/Mission/motion_line.c
+    Core/Src/Mission/motion_drive.c
     Core/Src/Mission/segment_ac.c
     Core/Src/Mission/segment_cb.c
     Core/Src/Mission/segment_bd.c

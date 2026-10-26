@@ -7,12 +7,12 @@
  * PI feedback corrects the error of this approximate linear estimate. */
 #define LEFT_FEED_FORWARD  (50.0f / 3346.0f)
 #define RIGHT_FEED_FORWARD (50.0f / 2727.5f)
-#define SPEED_KP           0.010f
-#define SPEED_KI           0.030f
-#define PWM_LIMIT         65.0f
-#define INTEGRAL_LIMIT    20.0f
+#define SPEED_KP           MOTION_SPEED_KP
+#define SPEED_KI           MOTION_SPEED_KI
+#define PWM_LIMIT         MOTION_PWM_LIMIT
+#define INTEGRAL_LIMIT    MOTION_SPEED_INTEGRAL_LIMIT
 #define TARGET_LIMIT_CPS  ((float)SPEED_CONTROL_MAX_CPS)
-#define TARGET_RAMP_CPS_S 5000.0f
+#define TARGET_RAMP_CPS_S MOTION_TARGET_RAMP_CPS_S
 #define FILTER_TIME_S     0.030f
 /* Outer correction for startup wheel travel imbalance, in cps/count.
  * Keep it small relative to the speed loops; it is not a heading sensor. */
