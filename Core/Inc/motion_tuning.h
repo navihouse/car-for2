@@ -162,6 +162,15 @@
  * 50 ms following period expires. React to fresh narrow-line frames at this
  * cadence; confirmation still requires three distinct frames and heading. */
 #define MOTION_CAPTURE_LINE_PERIOD_MS 10U
+/* Three captured frames prove visibility, not that the rolling corner has
+ * settled. Keep capture speed and fast control until these conditions hold
+ * continuously on fresh narrow-line frames, then permit normal arc cruise. */
+#define MOTION_ENTRY_SETTLE_MS 200U
+#define MOTION_ENTRY_CENTER_LIMIT 1000.0f
+#define MOTION_ENTRY_RATE_MARGIN_DPS 10.0f
+/* Wheel cps per deg/s of yaw above the nominal arc rate. Positive excess left
+ * yaw adds rightward steering. Applies while acquiring/settling a rolling entry. */
+#define MOTION_ENTRY_YAW_KD 3.0f
 /* Accept the line anywhere inside the probe bar during capture. The old +-1000
  * window (one probe pitch either side of centre) rejected exactly the case the
  * rolling entry produces: the line enters at the edge of the bar, so the first

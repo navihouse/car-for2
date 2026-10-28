@@ -284,6 +284,146 @@ static void TestFreshCaptureFramesReactBeforeFollow(void)
     CHECK(rig.ctx.phase==PHASE_FOLLOW && out.status==SEG_RUNNING);
 }
 
+static void EnterFollowWithoutPlant(Rig *rig)
+{
+    RigInit(rig,0.0f);
+    ShowWideStripe(rig);
+    (void)MotionArc_Enter(&rig->ctx,&rig->in,&CB);
+    for (uint32_t i=0U;i<MOTION_CAPTURE_CONFIRM_FRAMES;++i) {
+        rig->in.now_ms+=MOTION_CAPTURE_LINE_PERIOD_MS;
+        ShowNarrowStripe(rig);
+        (void)MotionArc_Update(&rig->ctx,&rig->in,&CB);
+    }
+    CHECK(rig->ctx.phase==PHASE_FOLLOW);
+}
+
+/* Three stripe samples certify that a line exists, not that the residual
+ * rolling turn has settled. Do not immediately accelerate to arc cruise. */
+static void TestFollowRetainsEntrySpeed(void)
+{
+    Rig rig;
+    EnterFollowWithoutPlant(&rig);
+    float base=0.5f*(rig.ctx.motion.left_target+rig.ctx.motion.right_target);
+    CHECK(base<=CB.capture_cps);
+}
+
+/* Residual left yaw while a centred stripe is still visible needs rightward
+ * damping. A new gyro observation must work even before the next line frame. */
+static void TestFollowDampsYawBeforeNextLineFrame(void)
+{
+    Rig rig;
+    EnterFollowWithoutPlant(&rig);
+    rig.in.left_cps=rig.in.right_cps=CB.capture_cps;
+    rig.in.yaw_rate_dps=100.0f;
+    rig.in.now_ms+=MOTION_CAPTURE_LINE_PERIOD_MS;
+    MissionSegmentOutput out=MotionArc_Update(&rig.ctx,&rig.in,&CB);
+    CHECK(out.status==SEG_RUNNING && out.mode==MOTION_FORWARD);
+    CHECK(out.left_cps>out.right_cps);
+    CHECK(0.5f*(out.left_cps+out.right_cps)<=CB.capture_cps);
+}
+
+static float CaptureNominalRate(void)
+{
+    return CB.capture_cps/MOTION_LEFT_COUNTS_PER_MM/(CB.nominal_mm/3.14159265f)*RAD_TO_DEG;
+}
+
+static void TestEntryReleaseNeedsFreshStableFrames(void)
+{
+    Rig rig;
+    EnterFollowWithoutPlant(&rig);
+    rig.in.left_cps=rig.in.right_cps=CB.capture_cps;
+    rig.in.yaw_rate_dps=CaptureNominalRate();
+    /* Time alone, including many main-loop polls, cannot release the entry. */
+    rig.in.now_ms+=MOTION_ENTRY_SETTLE_MS;
+    for (uint32_t i=0U;i<20U;++i) (void)MotionArc_Update(&rig.ctx,&rig.in,&CB);
+    CHECK(!rig.ctx.motion.entry_settled);
+    ShowNarrowStripe(&rig);
+    (void)MotionArc_Update(&rig.ctx,&rig.in,&CB);
+    CHECK(!rig.ctx.motion.entry_settled); /* only two distinct stable frames */
+    rig.in.now_ms+=MOTION_CAPTURE_LINE_PERIOD_MS;
+    ShowNarrowStripe(&rig);
+    (void)MotionArc_Update(&rig.ctx,&rig.in,&CB);
+    CHECK(rig.ctx.motion.entry_settled);
+    rig.in.now_ms+=MOTION_LINE_PERIOD_MS;
+    ShowNarrowStripe(&rig);
+    MissionSegmentOutput out=MotionArc_Update(&rig.ctx,&rig.in,&CB);
+    CHECK(fabsf(0.5f*(out.left_cps+out.right_cps)-CB.cruise_cps)<1.0f);
+}
+
+static void TestVisibleEdgeOrHighYawCannotReleaseEntry(void)
+{
+    for (uint32_t edge=0U;edge<2U;++edge) {
+        Rig rig;
+        EnterFollowWithoutPlant(&rig);
+        rig.in.left_cps=rig.in.right_cps=CB.capture_cps;
+        rig.in.yaw_rate_dps=CaptureNominalRate()+(edge ? 0.0f : 80.0f);
+        for (uint32_t i=0U;i<30U;++i) {
+            rig.in.now_ms+=MOTION_CAPTURE_LINE_PERIOD_MS;
+            if (edge) ShowStripeAt(&rig,6U); else ShowNarrowStripe(&rig);
+            MissionSegmentOutput out=MotionArc_Update(&rig.ctx,&rig.in,&CB);
+            CHECK(out.status==SEG_RUNNING && !rig.ctx.motion.entry_settled);
+            CHECK(0.5f*(out.left_cps+out.right_cps)<=CB.capture_cps);
+            CHECK(out.left_cps>0.0f && out.right_cps>0.0f);
+        }
+    }
+}
+
+static void TestGyroExcursionBetweenFramesRestartsSettling(void)
+{
+    Rig rig;
+    EnterFollowWithoutPlant(&rig);
+    rig.in.left_cps=rig.in.right_cps=CB.capture_cps;
+    rig.in.yaw_rate_dps=CaptureNominalRate();
+    rig.in.now_ms+=MOTION_CAPTURE_LINE_PERIOD_MS;
+    ShowNarrowStripe(&rig);
+    (void)MotionArc_Update(&rig.ctx,&rig.in,&CB);
+    CHECK(rig.ctx.motion.entry_stable_frames==2U);
+    rig.in.yaw_rate_dps=100.0f;
+    rig.in.now_ms+=MOTION_CAPTURE_LINE_PERIOD_MS;
+    (void)MotionArc_Update(&rig.ctx,&rig.in,&CB); /* no new line frame */
+    CHECK(rig.ctx.motion.entry_stable_frames==0U);
+    rig.in.yaw_rate_dps=CaptureNominalRate();
+    rig.in.now_ms+=MOTION_ENTRY_SETTLE_MS;
+    for (uint32_t i=0U;i<MOTION_CAPTURE_CONFIRM_FRAMES;++i) {
+        ShowNarrowStripe(&rig);
+        (void)MotionArc_Update(&rig.ctx,&rig.in,&CB);
+        CHECK(!rig.ctx.motion.entry_settled);
+        rig.in.now_ms+=MOTION_CAPTURE_LINE_PERIOD_MS;
+    }
+    rig.in.now_ms+=MOTION_ENTRY_SETTLE_MS;
+    ShowNarrowStripe(&rig);
+    (void)MotionArc_Update(&rig.ctx,&rig.in,&CB);
+    CHECK(rig.ctx.motion.entry_settled);
+}
+
+static void TestEarlyDropoutCorrectsRightEdgeAndStillTimesOut(void)
+{
+    Rig rig;
+    EnterFollowWithoutPlant(&rig);
+    rig.in.left_cps=rig.in.right_cps=CB.capture_cps;
+    rig.in.yaw_rate_dps=80.0f;
+    rig.in.now_ms+=MOTION_CAPTURE_LINE_PERIOD_MS;
+    ShowStripeAt(&rig,7U); /* field failure: last stripe position was +3500 */
+    MissionSegmentOutput out=MotionArc_Update(&rig.ctx,&rig.in,&CB);
+    CHECK(rig.ctx.motion.line_position==3500.0f);
+    CHECK(out.left_cps>out.right_cps);
+    rig.in.now_ms+=MOTION_CAPTURE_LINE_PERIOD_MS;
+    rig.in.line_mask=0U; ++rig.in.line_sequence;
+    uint32_t lost_ms=rig.in.now_ms;
+    out=MotionArc_Update(&rig.ctx,&rig.in,&CB);
+    CHECK(out.status==SEG_RUNNING && out.left_cps>out.right_cps);
+    CHECK(out.left_cps>0.0f && out.right_cps>0.0f);
+    /* A different gyro rate on the same white frame still changes damping. */
+    float old_left=out.left_cps,old_right=out.right_cps;
+    rig.in.yaw_rate_dps=-100.0f;
+    rig.in.now_ms+=MOTION_CAPTURE_LINE_PERIOD_MS;
+    out=MotionArc_Update(&rig.ctx,&rig.in,&CB);
+    CHECK(out.left_cps!=old_left || out.right_cps!=old_right);
+    rig.in.now_ms=lost_ms+MOTION_LINE_UNCERTAIN_MS;
+    out=MotionArc_Update(&rig.ctx,&rig.in,&CB);
+    CHECK(out.status==SEG_FAULT && out.fault==MOTION_FAULT_NO_LINE);
+}
+
 int main(void)
 {
     TestHandoffKeepsRolling();
@@ -295,7 +435,13 @@ int main(void)
     TestDaRollsTheOtherWay();
     TestStripeWinsBeforeHeadingConfirmation();
     TestFreshCaptureFramesReactBeforeFollow();
+    TestFollowRetainsEntrySpeed();
+    TestFollowDampsYawBeforeNextLineFrame();
+    TestEntryReleaseNeedsFreshStableFrames();
+    TestVisibleEdgeOrHighYawCannotReleaseEntry();
+    TestGyroExcursionBetweenFramesRestartsSettling();
+    TestEarlyDropoutCorrectsRightEdgeAndStillTimesOut();
     if (failures) { fprintf(stderr, "%d check(s) failed\n", failures); return 1; }
-    printf("arc rolling entry: 9 cases passed\n");
+    printf("arc rolling entry: 15 cases passed\n");
     return 0;
 }

@@ -40,7 +40,9 @@
 | `MOTION_CAPTURE_TIMEOUT_MS / MAX_MM` | 2000 ms / 320 mm | 捕线任一条件超限即故障；必须覆盖"过点后线暂时不在探头下"的盲区 |
 | `MOTION_STRAIGHT_HANDOFF_CPS / POINT_APPROACH_MM` | 1200 cps / 140 mm | 直线段在距**标称点** 140 mm 内降到该速度，把弯道入段所需的轮速差速留给转向。不要低于 1000 cps：600 cps 的占空比只有约 9%，低于持续滚动所需，车会停下并报 SPEED_FAULT |
 | `MOTION_CAPTURE_HEADING_KP / ACCEPT_DEG / LOOKAHEAD_MM` | 10 / 20° / 150 mm | 未见可用线时按已知半圆和前视距离引导；宽判点条保留入口航向修正。看到可用窄线后由巡线 PD 加曲率前馈接管，入口航向门限只用于确认进入 FOLLOW |
-| `MOTION_CAPTURE_LINE_PERIOD_MS` | 10 ms | C/D 滚动捕获看到窄线时的控制最小间隔，第一帧立即响应；增大会延迟扫线纠偏，减小到灰度帧间隔以下不会增加有效观测。FOLLOW 仍为 50 ms |
+| `MOTION_CAPTURE_LINE_PERIOD_MS` | 10 ms | C/D 捕获窄线及 FOLLOW 入弯稳定过程使用的灰度控制间隔；角速度反馈也在两帧之间更新。稳定后 FOLLOW 恢复 50 ms；增大会延迟扫线纠偏 |
+| `MOTION_ENTRY_SETTLE_MS / CENTER_LIMIT / RATE_MARGIN_DPS` | 200 ms / 1000 / 10°/s | C/D 进入 FOLLOW 后，窄线居中、角速度接近按实测轮速计算的圆弧转速，且至少三个新帧连续稳定到该时长才允许升到巡航速度。条件不满足时保持捕获速度；缩小位置/转速范围或增加时长会更晚放开速度 |
+| `MOTION_ENTRY_YAW_KD` | 3 cps/(°/s) | C/D 捕获窄线及入弯稳定时的角速度阻尼；转速超过名义圆弧转速时减少同向转动。增大会加强纠偏，也可能引发振荡，必须单变量实车复核 |
 | `MOTION_POINT_CONFIRM_FRAMES` | 3个新帧 | 黑白状态与端点跳变确认，重复读取同一帧不累加 |
 | `MOTION_BD_CORNER_OFFSET_DEG` | −5° | B 点转向角的实测修正：BD 目标航向 = 180+38.66+该偏移 = 213.66°，即 B 处左转 33.66°。只影响 B 点；换赛道或改转向参数后先用 `Heading_error_deg` 复核 |
 | `MOTION_LINE_UNCERTAIN_MS` | 100 ms | 丢线、歧义的暂时恢复时限 |
@@ -353,3 +355,37 @@ V3、FULL、IDLE / READY，Speed_fault=0、Segment_fault=0，陀螺仪及灰度�
 到当前项目 `navihouse/car-for2` 的 `main` 分支，最后核对远端提交 SHA。
 单段调试或其他分支以当次明确要求为准。烧录或推送失败时应明确报告实际
 结果，不能以本地构建成功代替烧录成功，也不能以本地提交代替远端上传成功。
+
+### 2026-10-28：C 点进入 FOLLOW 后越线并报 NO LINE
+
+烧录前通过 HOTPLUG 实际读到：FULL / FAULT、CB、Segment_fault=11(NO_LINE)、
+Distance_mm=239、Arrivals=1、Lap=0、Line_position=+3500、Line_mask=0x00、
+Target_yaw_deg=180、Heading_error_deg=144.381、Speed_fault=0。出口目标已切到
+180°，结合 NO_LINE 分支，确认本次丢线发生在进入 FOLLOW 后；位置 +3500
+是最后一次控制更新使用的右边缘线位置，不是全白时的有效线位置。快照不能
+直接证明之前的实际角速度或轮速差。
+
+旧代码的三帧捕获确认会立即把圆弧速度从 1000 放开到 1400 cps，并恢复
+50 ms 更新周期；没有用实际角速度判断滚动转向是否收稳。新增回归在修改前
+复现出立即加速、两帧之间不能按新角速度收回转向的问题。
+
+修正后 C/D 保留 CAPTURE → FOLLOW 状态编号，但 FOLLOW 开始时先保持
+1000 cps 和 10 ms 控制。要求窄线在 ±1000 内，实际角速度与按实测前进速度
+计算的半圆角速度之差在 ±10°/s 内，至少三个新帧、连续稳定 200 ms 后才
+放开 1400 cps。两个灰度帧之间若角速度再次超差，也重新计时。条件持续
+不满足时保持低速，原有整个圆弧的 30 s 超时仍适用。
+
+看到窄线的捕获期及 FOLLOW 稳定期使用 `MOTION_ENTRY_YAW_KD=3`，以
+陀螺仪角速度残差修正差速；灰度帧未更新时也能响应新角速度。稳定期短暂
+全白时按最后线位置和新角速度继续纠偏，清除旧微分，不再冻结原有轮速差；
+100 ms 丢线停车、灰度过期停车、正向最低轮速及轮速上限均保留。该修改是
+基于停机证据的下一版控制方案，实际能否消除越线仍须跑车确认。
+
+本次验证：主机 14/14 通过，其中滚动入弯测试为 15 个用例，覆盖捕获后不
+立即提速、无新灰度帧时的角速度阻尼、稳定所需的新帧与时长、边缘线或高
+角速度禁止提速、两帧之间超差重置计时、右边缘丢线纠偏以及 100 ms 到时
+仍报 NO_LINE。合成四圈 109 800 ms、16 次到点，只是模型中的集成验证。
+FULL/AC/CB/BD/DA Debug 及 FULL Release 构建成功，FULL Debug RAM 12 824 B、
+FLASH 59 276 B。15:20 经 Normal/SWrst 烧录并验证成功，HOTPLUG 读回为
+FULL / IDLE / READY，陀螺仪及灰度就绪、无故障、两轮目标为 0；未启动
+实车路线。新固件及本文记录一起提交到 GitHub。

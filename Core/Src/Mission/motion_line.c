@@ -46,7 +46,17 @@ static uint8_t NarrowStripe(uint32_t mask)
     for (uint32_t i=0;i<8U;i++) count+=(mask>>i)&1U;
     return count<=4U;
 }
-static void Targets(MissionMotionState *s, float cruise, float heading_trim, uint8_t following)
+/* Nominal yaw uses measured forward speed, so residual spin is damped even
+ * before the speed PI reaches the newly requested wheel targets. */
+static float EntryRateError(const MissionInput *in, const MissionSegmentParams *p)
+{
+    float speed=fmaxf(0.5f*(in->left_cps/MOTION_LEFT_COUNTS_PER_MM+
+        in->right_cps/MOTION_RIGHT_COUNTS_PER_MM),0.0f);
+    float nominal=speed/(p->nominal_mm/3.14159265f)*57.29578f;
+    return MOTION_YAW_SIGN*in->yaw_rate_dps-nominal;
+}
+static void Targets(MissionMotionState *s, float cruise, float heading_trim, uint8_t following,
+                    float yaw_trim)
 {
     float floor=cruise<MOTION_LINE_HIGH_SPEED_THRESHOLD_CPS ? MOTION_LINE_CORNER_BASE_CPS : MOTION_LINE_HIGH_BASE_FLOOR_CPS;
     float base=Motion_Clamp(cruise-fabsf(s->line_position)*MOTION_LINE_POSITION_SLOWDOWN,fminf(floor,cruise),cruise);
@@ -58,7 +68,7 @@ static void Targets(MissionMotionState *s, float cruise, float heading_trim, uin
      * outer wheel can never cross MOTION_MAX_CPS. */
     float turn_ff=following ? MOTION_LINE_CURVATURE_FF*cruise : 0.0f;
     float authority=fmaxf(cap-fabsf(turn_ff),0.0f);
-    float turn=turn_ff+Motion_Clamp(MOTION_LINE_KP*s->line_position+MOTION_LINE_KD*s->derivative-heading_trim,
+    float turn=turn_ff+Motion_Clamp(MOTION_LINE_KP*s->line_position+MOTION_LINE_KD*s->derivative-heading_trim+yaw_trim,
         -authority,authority);
     base=fminf(base,(float)MOTION_MAX_CPS-fabsf(turn));
     s->left_target=base+turn; s->right_target=base-turn;
@@ -164,6 +174,11 @@ MissionSegmentOutput MotionArc_Update(MissionSegmentContext *ctx, const MissionI
     uint8_t first_stripe=line_guided && !s->capture_line_tracking;
     s->capture_line_tracking=line_guided;
     if (line_guided) heading_trim=0.0f;
+    /* An angular-rate excursion between gray frames breaks continuity too;
+     * waiting for the next gray frame could hide a short residual turn. */
+    if (ctx->from_handoff && !s->entry_settled &&
+        (fault || fabsf(EntryRateError(in,p))>MOTION_ENTRY_RATE_MARGIN_DPS))
+        s->entry_stable_frames=0U;
     uint8_t new_capture=!s->have_capture_sequence || in->line_sequence!=s->capture_sequence;
     if (new_capture) {
         s->capture_sequence=in->line_sequence; s->have_capture_sequence=1U;
@@ -176,7 +191,20 @@ MissionSegmentOutput MotionArc_Update(MissionSegmentContext *ctx, const MissionI
             s->target_yaw_deg=p->target_yaw_deg;
             s->heading_error_deg=Motion_WrapDegrees(s->target_yaw_deg-Motion_Yaw(ctx,in));
         }
+        if (ctx->phase==PHASE_FOLLOW && ctx->from_handoff && !s->entry_settled) {
+            if (!fault && NarrowStripe(in->line_mask) && fabsf(position)<=MOTION_ENTRY_CENTER_LIMIT &&
+                fabsf(EntryRateError(in,p))<=MOTION_ENTRY_RATE_MARGIN_DPS) {
+                if (!s->entry_stable_frames) s->entry_stable_ms=in->now_ms;
+                if (s->entry_stable_frames<MOTION_CAPTURE_CONFIRM_FRAMES) ++s->entry_stable_frames;
+                if (s->entry_stable_frames>=MOTION_CAPTURE_CONFIRM_FRAMES &&
+                    (uint32_t)(in->now_ms-s->entry_stable_ms)>=MOTION_ENTRY_SETTLE_MS)
+                    s->entry_settled=1U;
+            } else s->entry_stable_frames=0U;
+        }
     }
+    uint8_t settling=ctx->phase==PHASE_FOLLOW && ctx->from_handoff && !s->entry_settled;
+    float cruise=(ctx->phase==PHASE_CAPTURE || settling) ? p->capture_cps : p->cruise_cps;
+    float yaw_trim=(line_guided || settling) ? MOTION_ENTRY_YAW_KD*EntryRateError(in,p) : 0.0f;
     if (fault) {
         if (!s->uncertain) {
             s->uncertain=1U; s->uncertain_ms=in->now_ms;
@@ -209,11 +237,19 @@ MissionSegmentOutput MotionArc_Update(MissionSegmentContext *ctx, const MissionI
             return Motion_Output(ctx,MOTION_FORWARD,base-steer,base+steer);
         }
         if ((uint32_t)(in->now_ms-s->uncertain_ms)>=grace) return Motion_Fail(ctx,fault);
+        if (settling && fault==MOTION_FAULT_NO_LINE) {
+            /* The last stripe side still tells us how to turn back. Do not
+             * freeze the old wheel differential while the gyro reports spin.
+             * Keep the original 100 ms dropout limit and positive wheel floors. */
+            s->derivative=0.0f;
+            Targets(s,p->capture_cps,0.0f,1U,yaw_trim);
+            return Motion_Output(ctx,MOTION_FORWARD,s->left_target,s->right_target);
+        }
         /* Preserve positive forward motion while seeking the entry tangent.
          * The overall capture time/distance bounds remain in force above. */
         return Motion_Output(ctx,MOTION_FORWARD,s->recovery_left,s->recovery_right);
     }
-    uint32_t line_period=line_guided ? MOTION_CAPTURE_LINE_PERIOD_MS : MOTION_LINE_PERIOD_MS;
+    uint32_t line_period=(line_guided || settling) ? MOTION_CAPTURE_LINE_PERIOD_MS : MOTION_LINE_PERIOD_MS;
     uint8_t recovering=s->uncertain || first_stripe;
     if (recovering) {
         s->uncertain=0U; s->last_position=position; s->derivative=0.0f;
@@ -228,12 +264,12 @@ MissionSegmentOutput MotionArc_Update(MissionSegmentContext *ctx, const MissionI
         }
         s->line_position=position; s->last_position=position; s->have_position=1U;
         s->line_sequence=in->line_sequence; s->have_line_sequence=1U; s->control_ms=in->now_ms;
-        Targets(s,ctx->phase==PHASE_CAPTURE ? p->capture_cps : p->cruise_cps,heading_trim,
-            ctx->phase==PHASE_FOLLOW || line_guided);
+        Targets(s,cruise,heading_trim,ctx->phase==PHASE_FOLLOW || line_guided,yaw_trim);
     }
-    /* Capture may finish on a fresh frame before the PD period. Update the
-     * cruise target immediately without differentiating the same frame twice. */
-    if (ctx->phase==PHASE_FOLLOW && s->capture_frames==MOTION_CAPTURE_CONFIRM_FRAMES)
-        Targets(s,p->cruise_cps,0.0f,1U);
+    /* Entry gyro damping keeps reacting between line frames without
+     * differentiating old gray data or accelerating before settling. */
+    if (line_guided || settling ||
+        (ctx->phase==PHASE_FOLLOW && s->capture_frames==MOTION_CAPTURE_CONFIRM_FRAMES))
+        Targets(s,cruise,heading_trim,ctx->phase==PHASE_FOLLOW || line_guided,yaw_trim);
     return Motion_Output(ctx,MOTION_FORWARD,s->left_target,s->right_target);
 }

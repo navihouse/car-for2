@@ -53,6 +53,7 @@ typedef struct {
     uint32_t still_since_ms, still_tracking, corrections, uncertain, uncertain_ms;
     uint32_t capture_frames, capture_sequence, have_capture_sequence, have_position;
     uint32_t have_track, capture_line_tracking;
+    uint32_t entry_stable_ms, entry_stable_frames, entry_settled;
 } MissionMotionState;
 typedef struct {
     MissionInput entry;
