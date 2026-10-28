@@ -20,6 +20,9 @@ typedef struct {
     MissionState state;
     MissionReason reason;
     uint32_t mode, started_ms, ended_ms, run_started, segment_fault, arrivals;
+    uint32_t lap, laps; /* 0-based completed-lap counter and the configured total. */
+    uint32_t laps_override; /* Bench/test total; 0 keeps the mode default. */
+    int32_t drift_mdeg; /* Sum of course-heading residuals cancelled at point A. */
     MissionSegmentId segment;
     MissionPoint last_point;
     float course_origin_deg;

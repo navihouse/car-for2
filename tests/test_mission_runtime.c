@@ -5,7 +5,7 @@
 
 static void Init(void)
 {
-    fake_pressed=0U; FakeSegments_Reset(); Mission_Init(0U);
+    fake_pressed=0U; FakeSegments_Reset(); Mission_Init(0U); Mission_SetLaps(1U);
 }
 static void TickRange(uint32_t first,uint32_t last)
 {

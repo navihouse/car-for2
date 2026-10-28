@@ -101,6 +101,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/Mission/motion_distance.c
     Core/Src/Mission/motion_edge.c
     Core/Src/Mission/motion_straight.c
+    Core/Src/Mission/motion_turn.c
     Core/Src/Mission/motion_line.c
     Core/Src/Mission/motion_drive.c
     Core/Src/Mission/segment_ac.c
@@ -108,3 +109,23 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/Mission/segment_bd.c
     Core/Src/Mission/segment_da.c
 )
+
+# Intel HEX + raw binary next to the .elf, so STM32_Programmer_CLI can flash it
+# (scripts/flash_mission.ps1). Uses the toolchain objcopy already on PATH.
+set(_mission_objcopy "${CMAKE_OBJCOPY}")
+if(NOT _mission_objcopy)
+    find_program(_mission_objcopy arm-none-eabi-objcopy)
+endif()
+if(_mission_objcopy)
+    add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+        COMMAND "${_mission_objcopy}" -O ihex
+                "$<TARGET_FILE:${CMAKE_PROJECT_NAME}>"
+                "$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/${CMAKE_PROJECT_NAME}.hex"
+        COMMAND "${_mission_objcopy}" -O binary
+                "$<TARGET_FILE:${CMAKE_PROJECT_NAME}>"
+                "$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/${CMAKE_PROJECT_NAME}.bin"
+        COMMENT "Generating ${CMAKE_PROJECT_NAME}.hex and ${CMAKE_PROJECT_NAME}.bin"
+        VERBATIM)
+else()
+    message(WARNING "arm-none-eabi-objcopy not found on PATH: no .hex/.bin generated")
+endif()

@@ -43,6 +43,8 @@ static void Init(MissionControl *m, MissionSegment segments[4], const MissionSeg
             &params,FakeEnter,FakeUpdate,FakeExit,NULL}; table[i]=&segments[i];
     }
     MissionControl_Init(m,mode,table);
+    /* The fake route is single-lap; the FULL lap roll-over has its own case. */
+    m->laps_override=1U;
 }
 int main(void)
 {
@@ -69,6 +71,24 @@ int main(void)
     }
     assert(MissionControl_Update(&m,&in).point==POINT_NONE && exits==4U);
     assert((uint32_t)(m.ended_ms-m.started_ms)==80U); /* millis rollover */
+
+    /* FULL repeats the four segments until the configured lap total. */
+    Init(&m,s,table,MISSION_MODE_FULL); m.laps_override=2U;
+    in=Fresh(0U); out=MissionControl_Start(&m,&in);
+    assert(out.action==DRIVE_BEGIN && m.laps==2U && !m.lap && !m.arrivals);
+    update_status=SEG_COMPLETE;
+    for (uint32_t i=0U;i<3U;++i) { in.now_ms+=20U; (void)MissionControl_Update(&m,&in); }
+    /* The course frame stays anchored at the first A: the roll-over only banks
+     * the residual as drift evidence, so the next lap's AC turn self-corrects. */
+    in.now_ms+=20U; in.yaw_deg+=5.0f; (void)MissionControl_Update(&m,&in);
+    assert(m.state==MISSION_RUNNING && m.lap==1U && m.segment==SEGMENT_AC);
+    assert(m.arrivals==4U && enters==5U);
+    assert(m.course_origin_deg==Fresh(0U).yaw_deg);
+    assert(m.drift_mdeg==(int32_t)(MOTION_YAW_SIGN*5.0f*1000.0f));
+    for (uint32_t i=0U;i<3U;++i) { in.now_ms+=20U; (void)MissionControl_Update(&m,&in); }
+    in.now_ms+=20U; out=MissionControl_Update(&m,&in);
+    assert(out.action==DRIVE_STOP && m.state==MISSION_DONE && m.arrivals==8U && m.lap==1U);
+    assert(MissionControl_Update(&m,&in).action==DRIVE_HOLD && exits==8U);
 
     for(uint32_t mode=MISSION_MODE_AC;mode<=MISSION_MODE_DA;++mode) {
         Init(&m,s,table,mode); out=MissionControl_Start(&m,&in);

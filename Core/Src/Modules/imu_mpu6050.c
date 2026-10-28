@@ -1,5 +1,6 @@
 #include "imu_mpu6050.h"
 #include "imu_heading.h"
+#include "imu_config.h"
 #include "main.h"
 /* C10B H6, schematic sheet 3: pin 3 PB14/SCL, pin 4 PB15/SDA.
  * Open-drain software I2C. PB9/INT is unused; poll DATA_RDY.
@@ -16,46 +17,65 @@ static uint32_t samples, errors, misses, max_update_us, zero_count;
 static uint32_t transaction_cycles, bus_fault;
 static uint8_t address, identity, configured;
 static int16_t accel[3], gyro[3];
-static uint8_t slow_bus, signal_reset_done, config_readback[9];
+static uint8_t slow_bus, signal_reset_done, interrupt_configured, config_readback[9];
+/* Raw V3: normal_bytes[0,13,14] are the status/Z control sample;
+ * bytes [1..12] and accel/gyro X/Y come from the timestamped slow diagnostic
+ * transaction. They are not a simultaneous full six-axis measurement. */
 static uint8_t normal_bytes[15], slow_bytes[14], ax_bytes[2], gz_bytes[2];
 static uint32_t cross_stage, cross_count, cross_errors, cross_begin_ms;
 static uint32_t slow_frame_ms, ax_frame_ms, gz_frame_ms;
 static uint32_t boot_attempts, boot_failures, bus_clear_count, clear_clocks, recovery_ok;
 static uint32_t Cycles(void) { return DWT->CYCCNT; }
 static uint32_t PinLevels(void) { uint32_t pins=GPIOB->IDR;return ((pins&SCL)!=0U)|(((pins&SDA)!=0U)<<1U); }
-static void Delay(void) { uint32_t n=Cycles();uint32_t ticks=SystemCoreClock/(slow_bus ? 166666U : 333333U);for (uint32_t guard=0;guard<10000U && (uint32_t)(Cycles()-n)<ticks;guard++) __NOP(); }
-static void Low(uint32_t pin) { GPIOB->BRR=pin; }
-static void Release(uint32_t pin) { GPIOB->BSRR=pin; }
+/* Match car-02-'s 5 us setup/clock phases and HAL open-drain GPIO writes.
+ * Keep bounded clock stretching, transaction timeouts and bus recovery. */
+static void Delay(void)
+{
+    uint32_t n=Cycles();
+    uint32_t ticks=(SystemCoreClock/1000000U)*(slow_bus ? 10U : 5U);
+    for (uint32_t guard=0;guard<10000U && (uint32_t)(Cycles()-n)<ticks;guard++) __NOP();
+}
+static void Low(uint32_t pin) { HAL_GPIO_WritePin(GPIOB,(uint16_t)pin,GPIO_PIN_RESET); }
+static void Release(uint32_t pin) { HAL_GPIO_WritePin(GPIOB,(uint16_t)pin,GPIO_PIN_SET); }
 static uint8_t HighClock(void)
 {
     Release(SCL);
     uint32_t begin=Cycles();
     for (uint32_t guard=0;guard<20000U;guard++) {
-        if ((uint32_t)(Cycles()-transaction_cycles)>SystemCoreClock/(slow_bus ? 125U : 250U)) { bus_fault=2U;return 0U; }
-        if (GPIOB->IDR&SCL) return 1U;
-        if ((uint32_t)(Cycles()-begin)>SystemCoreClock/5000U) break;
+        if ((uint32_t)(Cycles()-transaction_cycles)>SystemCoreClock/(slow_bus ? 83U : 166U)) { bus_fault=2U;return 0U; }
+        if (HAL_GPIO_ReadPin(GPIOB,SCL)==GPIO_PIN_SET) return 1U;
+        if ((uint32_t)(Cycles()-begin)>=SystemCoreClock/10000U) break;
     }
     bus_fault=1U;return 0U;
 }
+static uint8_t Clock(uint8_t high)
+{
+    if (high) { if (!HighClock()) return 0U; }
+    else Low(SCL);
+    Delay();return 1U;
+}
 static void Stop(void)
 {
-    Low(SCL);Low(SDA);Delay();(void)HighClock();Delay();Release(SDA);Delay();
+    (void)Clock(0U);Low(SDA);Delay();(void)Clock(1U);Release(SDA);Delay();
     Release(SCL|SDA);
 }
 static uint8_t Start(void)
 {
-    Release(SDA);Delay();if (!HighClock()) return 0U;Delay();
-    if (!(GPIOB->IDR&SDA)) { bus_fault=3U;return 0U; }
-    Low(SDA);Delay();Low(SCL);return 1U;
+    Release(SDA);
+    if (!Clock(1U)) return 0U;
+    if (HAL_GPIO_ReadPin(GPIOB,SDA)==GPIO_PIN_RESET) { bus_fault=3U;return 0U; }
+    Low(SDA);Delay();return Clock(0U);
 }
 static uint8_t WriteByte(uint8_t value)
 {
     for (uint32_t i=0;i<8U;i++) {
         if (value&0x80U) Release(SDA);else Low(SDA);
-        Delay();if (!HighClock()) return 0U;Delay();Low(SCL);value<<=1;
+        Delay();if (!Clock(1U)) return 0U;
+        (void)Clock(0U);value<<=1;
     }
-    Release(SDA);Delay();if (!HighClock()) return 0U;Delay();
-    uint8_t ack=(GPIOB->IDR&SDA)==0U;Low(SCL);
+    Release(SDA);Delay();if (!Clock(1U)) return 0U;
+    uint8_t ack=HAL_GPIO_ReadPin(GPIOB,SDA)==GPIO_PIN_RESET;
+    (void)Clock(0U);
     if (!ack) bus_fault=4U;
     return ack;
 }
@@ -63,11 +83,13 @@ static uint8_t ReadByte(uint8_t *value,uint8_t ack)
 {
     *value=0;Release(SDA);
     for (uint32_t i=0;i<8U;i++) {
-        Delay();if (!HighClock()) return 0U;Delay();
-        *value=(uint8_t)((*value<<1)|((GPIOB->IDR&SDA)!=0U));Low(SCL);
+        if (!Clock(1U)) return 0U;
+        *value=(uint8_t)((*value<<1)|(HAL_GPIO_ReadPin(GPIOB,SDA)==GPIO_PIN_SET));
+        (void)Clock(0U);
     }
     if (ack) Low(SDA);else Release(SDA);
-    Delay();if (!HighClock()) return 0U;Delay();Low(SCL);Release(SDA);return 1U;
+    if (!Clock(1U)) return 0U;
+    (void)Clock(0U);return 1U;
 }
 static uint8_t ReadRegs(uint8_t device,uint8_t reg,uint8_t *data,uint32_t size)
 {
@@ -110,7 +132,7 @@ static uint8_t InitBus(void)
     if (Cycles()==before) return 0U;
     Release(SCL|SDA);
     GPIO_InitTypeDef pins={0};pins.Pin=SCL|SDA;pins.Mode=GPIO_MODE_OUTPUT_OD;
-    pins.Pull=GPIO_NOPULL;pins.Speed=GPIO_SPEED_FREQ_LOW;HAL_GPIO_Init(GPIOB,&pins);
+    pins.Pull=GPIO_NOPULL;pins.Speed=GPIO_SPEED_FREQ_HIGH;HAL_GPIO_Init(GPIOB,&pins);
     /* Bus recovery runs after the initial power-up wait, before each probe. */
     bus_fault=0U;return 1U;
 }
@@ -128,19 +150,19 @@ static int16_t BigEndian(const uint8_t *data)
 static void Publish(uint32_t now_ms)
 {
     uint32_t seq=(imu_diag[2]+2U)&~1U;imu_diag[2]=seq-1U;
-    imu_diag[0]=0x494D5531U;imu_diag[1]=1U;imu_diag[3]=state;imu_diag[4]=fault;
+    imu_diag[0]=0x494D5531U;imu_diag[1]=2U;imu_diag[3]=state;imu_diag[4]=fault;
     imu_diag[5]=address;imu_diag[6]=identity;imu_diag[7]=samples;imu_diag[8]=last_frame_ms;
     imu_diag[9]=now_ms;imu_diag[10]=samples ? now_ms-last_frame_ms : UINT32_MAX;
     for (uint32_t i=0;i<3;i++) { imu_diag[11+i]=(uint32_t)(int32_t)gyro[i];imu_diag[14+i]=(uint32_t)(int32_t)accel[i]; }
-    imu_diag[17]=(uint32_t)(int32_t)(heading.bias_raw*1000.0f/131.0f);
+    imu_diag[17]=(uint32_t)(int32_t)(heading.bias_raw*1000.0f/IMU_GYRO_LSB_PER_DPS);
     imu_diag[18]=(uint32_t)(int32_t)(heading.yaw_deg*1000.0f);imu_diag[19]=(uint32_t)(int32_t)(heading.rate_dps*1000.0f);
     imu_diag[20]=heading.samples;imu_diag[21]=heading.restarts;imu_diag[22]=errors;
     imu_diag[23]=max_update_us;imu_diag[24]=bus_fault;imu_diag[25]=misses;
-    imu_diag[26]=configured==9U ? 0U : UINT32_MAX;imu_diag[27]=configured==9U ? 9U : UINT32_MAX;
-    imu_diag[28]=configured==9U ? 3U : UINT32_MAX;imu_diag[29]=zero_count;imu_diag[30]=heading.reject_reason;
+    imu_diag[26]=configured==9U ? IMU_GYRO_CONFIG : UINT32_MAX;imu_diag[27]=configured==9U ? IMU_SAMPLE_DIVIDER : UINT32_MAX;
+    imu_diag[28]=configured==9U ? IMU_DLPF_CONFIG : UINT32_MAX;imu_diag[29]=zero_count;imu_diag[30]=heading.reject_reason;
     imu_diag[31]=seq;imu_diag[2]=seq;publish_ms=now_ms;
     seq=(imu_raw_diag[2]+2U)&~1U;imu_raw_diag[2]=seq-1U;
-    imu_raw_diag[0]=0x49525731U;imu_raw_diag[1]=2U;imu_raw_diag[3]=cross_count;
+    imu_raw_diag[0]=0x49525731U;imu_raw_diag[1]=3U;imu_raw_diag[3]=cross_count;
     imu_raw_diag[4]=now_ms;imu_raw_diag[5]=last_frame_ms;imu_raw_diag[6]=slow_frame_ms;
     imu_raw_diag[7]=ax_frame_ms;imu_raw_diag[8]=gz_frame_ms;imu_raw_diag[9]=cross_errors;
     imu_raw_diag[10]=signal_reset_done;
@@ -149,7 +171,7 @@ static void Publish(uint32_t now_ms)
     for (uint32_t i=0;i<2U;i++) { imu_raw_diag[40+i]=ax_bytes[i];imu_raw_diag[42+i]=gz_bytes[i]; }
     for (uint32_t i=0;i<9U;i++) imu_raw_diag[44+i]=config_readback[i];
     imu_raw_diag[53]=cross_stage;imu_raw_diag[54]=configured;
-    imu_raw_diag[55]=6U;imu_raw_diag[56]=3U;
+    imu_raw_diag[55]=10U;imu_raw_diag[56]=5U;
     imu_raw_diag[57]=boot_attempts;imu_raw_diag[58]=bus_clear_count;imu_raw_diag[59]=clear_clocks;
     imu_raw_diag[60]=PinLevels();imu_raw_diag[61]=recovery_ok;imu_raw_diag[62]=boot_failures;
     imu_raw_diag[63]=seq;imu_raw_diag[2]=seq;
@@ -159,7 +181,7 @@ static void Publish(uint32_t now_ms)
     imu_gyro_test[5]=gyro_check.samples;imu_gyro_test[6]=gyro_check.restarts;
     imu_gyro_test[7]=now_ms;imu_gyro_test[8]=gyro_check.last_ms;
     imu_gyro_test[9]=gyro_check.have_time ? now_ms-gyro_check.last_ms : UINT32_MAX;
-    imu_gyro_test[10]=(uint32_t)(int32_t)(gyro_check.bias*1000.0f/131.0f);
+    imu_gyro_test[10]=(uint32_t)(int32_t)(gyro_check.bias*1000.0f/IMU_GYRO_LSB_PER_DPS);
     imu_gyro_test[11]=(uint32_t)(int32_t)(gyro_check.rate*1000.0f);
     imu_gyro_test[12]=(uint32_t)(int32_t)(gyro_check.yaw*1000.0f);
     imu_gyro_test[13]=gyro_check.zero_count;imu_gyro_test[14]=gyro_check.zero_ms;
@@ -173,14 +195,14 @@ static void Publish(uint32_t now_ms)
     imu_gyro_test[22]=0U; /* Motor control enabled: NEVER set by this test. */
     imu_gyro_test[23]=400U;imu_gyro_test[24]=gyro_check.first_ms;
     imu_gyro_test[25]=(uint32_t)(int32_t)gyro[2];
-    imu_gyro_test[26]=(gyro_check.bias>2620.0f || gyro_check.bias< -2620.0f);
+    imu_gyro_test[26]=(gyro_check.bias>20.0f*IMU_GYRO_LSB_PER_DPS || gyro_check.bias< -20.0f*IMU_GYRO_LSB_PER_DPS);
     imu_gyro_test[31]=seq;imu_gyro_test[2]=seq;
 }
 void Imu_Init(uint32_t now_ms)
 {
     ImuHeading_Reset(&heading);GyroCheck_Reset(&gyro_check);state=IMU_BOOT;fault=IMU_OK;phase_ms=poll_ms=now_ms;
     samples=errors=misses=max_update_us=zero_count=0U;address=identity=configured=0U;last_frame_ms=0U;
-    slow_bus=signal_reset_done=0U;cross_stage=cross_count=cross_errors=0U;cross_begin_ms=now_ms;
+    slow_bus=signal_reset_done=interrupt_configured=0U;cross_stage=cross_count=cross_errors=0U;cross_begin_ms=now_ms;
     slow_frame_ms=ax_frame_ms=gz_frame_ms=0U;
     boot_attempts=boot_failures=bus_clear_count=clear_clocks=recovery_ok=0U;
     for (uint32_t i=0;i<3U;i++) { accel[i]=0;gyro[i]=0; }
@@ -212,7 +234,7 @@ void Imu_GetGyroSample(uint32_t now_ms, ImuGyroSample *sample)
     sample->device_fault=fault;sample->last_ms=gyro_check.last_ms;
     sample->age_ms=gyro_check.have_time ? now_ms-gyro_check.last_ms : UINT32_MAX;
     sample->yaw=gyro_check.yaw;sample->rate=gyro_check.rate;
-    sample->bias_dps=gyro_check.bias/131.0f;sample->accel_mask=0U;
+    sample->bias_dps=gyro_check.bias/IMU_GYRO_LSB_PER_DPS;sample->accel_mask=0U;
     for (uint32_t i=0;i<3U;i++) if (accel[i]==-32768 || accel[i]==32767) sample->accel_mask|=1U<<i;
 }
 void Imu_GetHeadingSample(uint32_t now_ms, ImuHeadingSample *sample)
@@ -224,7 +246,7 @@ void Imu_GetHeadingSample(uint32_t now_ms, ImuHeadingSample *sample)
         .yaw_deg = heading.yaw_deg, .rate_dps = heading.rate_dps
     };
 }
-static void Advance(uint32_t now_ms)
+static void Advance(uint32_t now_ms, uint8_t wheels_still)
 {
     if (state==IMU_FAULT) return;
     if (state==IMU_BOOT) {
@@ -237,20 +259,24 @@ static void Advance(uint32_t now_ms)
         }
         if (!response) { BootFailure(IMU_NO_ACK,now_ms);return; }
         if (identity!=0x68U) { Fail(IMU_BAD_ID);return; }
-        if (!WriteReg(0x6BU,0x80U)) { BootFailure(IMU_BUS_ERROR,now_ms);return; }
-        state=IMU_RESET_WAIT;phase_ms=now_ms;return;
+        /* car-02- configures the awake device directly. Do not add a
+         * device/signal-path reset that the reference driver does not use. */
+        state=IMU_RESET_WAIT;phase_ms=now_ms-100U;return;
     }
     if (state==IMU_RESET_WAIT) {
         if ((uint32_t)(now_ms-phase_ms)<100U) return;
-        if (!signal_reset_done) {
-            /* RM-MPU-6000A-00 section 4.26: reset analog/digital paths.
-             * This write-only, self-clearing register is not readback-tested. */
-            if (!WriteReg(0x68U,0x07U)) { errors++;Fail(IMU_BUS_ERROR);return; }
-            signal_reset_done=1U;phase_ms=now_ms;state=IMU_SIGNAL_RESET_WAIT;return;
+        if (!interrupt_configured) {
+            uint8_t value=0xFFU;
+            /* Clear DATA_RDY only by reading INT_STATUS, as in car-02-. */
+            if (!WriteReg(0x37U,0x00U) || !ReadRegs(address,0x37U,&value,1U)) {
+                errors++;Fail(IMU_BUS_ERROR);return;
+            }
+            if (value!=0U) { Fail(IMU_CONFIG_ERROR);return; }
+            interrupt_configured=1U;return;
         }
         /* Configure and verify one register per main iteration. */
         static const uint8_t regs[]={0x6B,0x6C,0x19,0x1A,0x1B,0x1C,0x23,0x6A,0x38};
-        static const uint8_t vals[]={0x01,0x00,0x09,0x03,0x00,0x00,0x00,0x00,0x01};
+        static const uint8_t vals[]={0x01,0x00,IMU_SAMPLE_DIVIDER,IMU_DLPF_CONFIG,IMU_GYRO_CONFIG,0x00,0x00,0x00,0x01};
         if (configured<sizeof(regs)) {
             uint8_t value=0U;
             if (!WriteReg(regs[configured],vals[configured]) || !ReadRegs(address,regs[configured],&value,1U)) { errors++;Fail(IMU_BUS_ERROR);return; }
@@ -260,27 +286,26 @@ static void Advance(uint32_t now_ms)
         }
         state=IMU_SETTLE;phase_ms=now_ms;return;
     }
-    if (state==IMU_SIGNAL_RESET_WAIT) {
-        if ((uint32_t)(now_ms-phase_ms)<100U) return;
-        state=IMU_RESET_WAIT;phase_ms=now_ms-100U;return;
-    }
     if (state==IMU_SETTLE) {
         if ((uint32_t)(now_ms-phase_ms)<200U) return;
-        state=IMU_CALIBRATING;poll_ms=now_ms-5U;last_frame_ms=now_ms;
+        state=IMU_CALIBRATING;poll_ms=now_ms-IMU_POLL_MS;last_frame_ms=now_ms;
     }
-    if ((uint32_t)(now_ms-poll_ms)<5U) return;
+    if ((uint32_t)(now_ms-poll_ms)<IMU_POLL_MS) return;
     poll_ms=now_ms;
-    uint8_t data[15]={0};
-    if (!ReadRegs(address,0x3AU,data,sizeof(data))) { errors++;Fail(IMU_BUS_ERROR);return; }
-    if (!(data[0]&1U)) {
+    uint8_t status=0U, z_bytes[2]={0};
+    if (!ReadRegs(address,0x3AU,&status,1U)) { errors++;Fail(IMU_BUS_ERROR);return; }
+    if (!(status&1U)) {
         misses++;if ((uint32_t)(now_ms-last_frame_ms)>50U) Fail(IMU_SAMPLE_GAP);
         return;
     }
-    for (uint32_t i=0;i<3;i++) { accel[i]=BigEndian(&data[1+i*2]);gyro[i]=BigEndian(&data[9+i*2]); }
-    for (uint32_t i=0;i<15U;i++) normal_bytes[i]=data[i];
+    /* Same fresh Z-only read as car-02-. Other axes are collected
+     * separately by CrossRead for diagnostics, never for yaw readiness. */
+    if (!ReadRegs(address,0x47U,z_bytes,2U)) { errors++;Fail(IMU_BUS_ERROR);return; }
+    gyro[2]=BigEndian(z_bytes);
+    normal_bytes[0]=status;normal_bytes[13]=z_bytes[0];normal_bytes[14]=z_bytes[1];
     samples++;last_frame_ms=now_ms;
     GyroCheck_Sample(&gyro_check,gyro,now_ms);
-    uint32_t result=ImuHeading_Sample(&heading,accel,gyro,now_ms);
+    uint32_t result=ImuHeading_Sample(&heading,gyro[2],wheels_still,now_ms);
     if (result==HEADING_GAP) Fail(IMU_SAMPLE_GAP);
     else if (result==HEADING_SATURATED) Fail(IMU_GYRO_SATURATED);
     else state=heading.ready ? IMU_READY : IMU_CALIBRATING;
@@ -303,6 +328,9 @@ static void CrossRead(uint32_t now_ms)
     if (!ok) { cross_errors++;cross_stage=0U;return; }
     if (cross_stage==1U) {
         for (uint32_t i=0;i<14U;i++) slow_bytes[i]=bytes[i];
+        for (uint32_t i=0;i<3U;i++) accel[i]=BigEndian(&bytes[i*2U]);
+        for (uint32_t i=0;i<2U;i++) gyro[i]=BigEndian(&bytes[8U+i*2U]);
+        for (uint32_t i=0;i<12U;i++) normal_bytes[1U+i]=bytes[i];
         slow_frame_ms=now_ms;cross_stage=2U;
     } else if (cross_stage==2U) {
         ax_bytes[0]=bytes[0];ax_bytes[1]=bytes[1];ax_frame_ms=now_ms;cross_stage=3U;
@@ -310,9 +338,9 @@ static void CrossRead(uint32_t now_ms)
         gz_bytes[0]=bytes[0];gz_bytes[1]=bytes[1];gz_frame_ms=now_ms;cross_stage=0U;cross_count++;
     }
 }
-void Imu_Update(uint32_t now_ms)
+void Imu_Update(uint32_t now_ms, uint8_t wheels_still)
 {
-    uint32_t begin=Cycles();Advance(now_ms);CrossRead(now_ms);
+    uint32_t begin=Cycles();Advance(now_ms,wheels_still);CrossRead(now_ms);
     GyroCheck_Tick(&gyro_check,now_ms,state==IMU_FAULT);
     uint32_t us=(uint32_t)(Cycles()-begin)/(SystemCoreClock/1000000U);
     if (us>max_update_us) max_update_us=us;

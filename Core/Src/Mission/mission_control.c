@@ -79,6 +79,9 @@ MissionOutput MissionControl_Start(MissionControl *m, const MissionInput *in)
     if (m->state == MISSION_RUNNING) return Output(DRIVE_HOLD);
     m->reason = MISSION_OK; m->segment_fault = m->arrivals = 0U; m->last_point = POINT_NONE;
     m->started_ms = m->ended_ms = m->run_started = 0U;
+    m->lap = 0U; m->drift_mdeg = 0;
+    m->laps = m->laps_override ? m->laps_override :
+        (m->mode == MISSION_MODE_FULL ? MISSION_FULL_LAPS : 1U);
     uint32_t first = m->mode == MISSION_MODE_FULL ? 0U : m->mode - 1U;
     uint32_t end = m->mode == MISSION_MODE_FULL ? SEGMENT_COUNT : first + 1U;
     if (m->mode > MISSION_MODE_DA || !Motion_ValidateTuning()) {
@@ -129,11 +132,28 @@ MissionOutput MissionControl_Update(MissionControl *m, const MissionInput *in)
     Exit(m, in, EXIT_COMPLETE);
     m->last_point = arrived; ++m->arrivals;
     MissionOutput out;
-    if (m->mode != MISSION_MODE_FULL || m->segment == SEGMENT_DA) {
+    if (m->mode != MISSION_MODE_FULL || (m->segment == SEGMENT_DA && m->lap + 1U >= m->laps)) {
         m->state = MISSION_DONE; m->reason = MISSION_OK; m->ended_ms = in->now_ms;
         out = Output(DRIVE_STOP);
     } else {
-        ++m->segment;
+        if (m->segment == SEGMENT_DA) {
+            /* Point A closes the circuit, so the residual tells how far the lap
+             * drifted. Record it, then (by default) KEEP the original origin:
+             * re-zeroing here would re-anchor the frame to the pose the car held
+             * at the crossing, and every later AC leg would inherit that error -
+             * the field run measured 21 deg, which sent the next diagonal into
+             * the CB arc. Absolute headings self-correct instead, because the
+             * next A turn simply turns further to reach the fixed -38.66 deg. */
+            float residual = Motion_WrapDegrees(MOTION_YAW_SIGN * (in->yaw_deg - m->course_origin_deg));
+            m->drift_mdeg += (int32_t)(residual * 1000.0f);
+#if MISSION_LAP_ORIGIN_RESET
+            m->course_origin_deg = in->yaw_deg;
+#endif
+            ++m->lap;
+            m->segment = SEGMENT_AC;
+        } else {
+            ++m->segment;
+        }
         reason = CheckInput(m->segments[m->segment], in);
         if (reason != MISSION_OK) out = MissionControl_Fail(m, in, reason, in->speed_fault);
         else out = Accept(m, in, Enter(m, in), DRIVE_TARGET);

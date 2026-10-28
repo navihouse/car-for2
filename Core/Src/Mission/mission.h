@@ -9,7 +9,12 @@ void Mission_Update(uint32_t now_ms);
 uint8_t Mission_Start(uint32_t now_ms);
 void Mission_Stop(uint32_t now_ms);
 
-/* V2 diagnostic ABI (144 bytes). Old task2/mode2/line-follow layouts are retired.
+/* Bench override for the FULL lap total; 0 restores MISSION_FULL_LAPS. Call
+ * before Mission_Start. Rejected while a run is in progress. */
+void Mission_SetLaps(uint32_t laps);
+
+/* V3 diagnostic ABI (152 bytes). Old task2/mode2/line-follow layouts are retired.
+ * V3 added the lap counter and the drift residual; V2 readers see a longer record.
  * Read while stopped or accept only equal even sequence_begin/sequence_end
  * across a read. Enumerations are defined in mission_control/segment.h. */
 typedef struct {
@@ -25,7 +30,9 @@ typedef struct {
     int32_t line_position;
     uint32_t point_confirm_frames, turn_corrections;
     int32_t nominal_mm;
-    uint32_t capture_frames, sequence_end;
+    uint32_t capture_frames, lap;
+    int32_t drift_mdeg;
+    uint32_t sequence_end;
 } MissionDiagnostics;
 extern volatile MissionDiagnostics mission_diag;
 #endif

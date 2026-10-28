@@ -20,7 +20,7 @@ typedef struct {
 } ImuHeadingSample;
 void Imu_GetHeadingSample(uint32_t now_ms, ImuHeadingSample *sample);
 void Imu_Init(uint32_t now_ms);
-void Imu_Update(uint32_t now_ms);
+void Imu_Update(uint32_t now_ms, uint8_t wheels_still);
 void Imu_Calibrate(uint32_t now_ms);
 void Imu_Zero(void);
 void Imu_GyroTestBegin(uint32_t now_ms);

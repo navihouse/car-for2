@@ -11,7 +11,7 @@ static uint32_t press_ms, tracking, consumed, event_count, last_event_ms;
 static int32_t left_target, right_target;
 static uint32_t last_publish_ms;
 static MissionMotionMode commanded_mode;
-_Static_assert(sizeof(MissionDiagnostics) == 144U, "Update the mission dump decoder");
+_Static_assert(sizeof(MissionDiagnostics) == 152U, "Update the mission dump decoder");
 
 static int32_t DiagnosticNumber(float value)
 {
@@ -35,7 +35,7 @@ static void Publish(uint32_t now)
         mission_diag.phase==ctx->phase && mission_diag.motion_mode==(uint32_t)commanded_mode) return;
     uint32_t seq = (mission_diag.sequence_begin + 2U) & ~1U;
     MissionDiagnostics d = {
-        .magic = 0x4D534E31U, .version = 2U, .sequence_begin = seq - 1U,
+        .magic = 0x4D534E31U, .version = 3U, .sequence_begin = seq - 1U,
         .mode = control.mode, .state = control.state, .reason = control.reason,
         .segment = control.segment, .segment_fault = control.segment_fault,
         .uptime_ms = now, .arrivals = control.arrivals, .last_point = control.last_point,
@@ -52,6 +52,7 @@ static void Publish(uint32_t now)
         .line_position=DiagnosticNumber(ctx->motion.line_position),
         .point_confirm_frames=ctx->motion.edge.candidate_frames, .turn_corrections=ctx->motion.corrections,
         .nominal_mm=DiagnosticNumber(params->nominal_mm), .capture_frames=ctx->motion.capture_frames,
+        .lap=control.lap, .drift_mdeg=control.drift_mdeg,
         .sequence_end = seq
     };
     if (control.state == MISSION_RUNNING) d.elapsed_ms = now - control.started_ms;
@@ -118,6 +119,13 @@ uint8_t Mission_Start(uint32_t now)
     }
     Publish(now);
     return ok;
+}
+void Mission_SetLaps(uint32_t laps)
+{
+    /* laps_override is read by MissionControl_Start, so a running route keeps
+     * the total it launched with. */
+    if (control.state == MISSION_RUNNING) return;
+    control.laps_override = laps;
 }
 void Mission_Stop(uint32_t now)
 {

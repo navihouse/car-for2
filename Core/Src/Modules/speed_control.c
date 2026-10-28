@@ -37,6 +37,10 @@ static uint32_t left_reverse_counts;
 static uint32_t right_reverse_counts;
 static int64_t turn_left_origin,turn_right_origin;
 static uint32_t turn_left_wrong,turn_right_wrong;
+/* 0..1 per wheel: restores the faded turn breakaway kick while a wheel is
+ * actually stalled, then decays once it turns so the fine approach keeps its
+ * low free-running effort and does not overshoot. */
+static float left_boost,right_boost;
 
 static float Clamp(float value, float minimum, float maximum)
 {
@@ -60,7 +64,16 @@ static int32_t ControlWheel(float reference, float measured, float dt,
     {
         *integral = candidate;
     }
-    return (int32_t)(Clamp(base + *integral, 0.0f, PWM_LIMIT) + 0.5f);
+    float pwm = base + *integral;
+    /* Breakaway assist: a wheel asked for real speed but reading nothing is
+     * either stalled against stiction or against something solid. Add a fixed
+     * duty so the first case recovers; the term disappears as soon as counts
+     * arrive, so the rolling regime stays exactly as tuned, and the second case
+     * still reaches the no-feedback guard. */
+    if ((reference < 0.0f ? -reference : reference) >= MOTION_BREAKAWAY_MIN_CPS &&
+        (measured < 0.0f ? -measured : measured) < MOTION_BREAKAWAY_STALL_CPS)
+        pwm += reference < 0.0f ? -MOTION_BREAKAWAY_PWM : MOTION_BREAKAWAY_PWM;
+    return (int32_t)(Clamp(pwm, 0.0f, PWM_LIMIT) + 0.5f);
 }
 
 void SpeedControl_Stop(void)
@@ -72,6 +85,7 @@ void SpeedControl_Stop(void)
     speed_control.right_pwm = 0;
     left_integral = 0.0f;
     right_integral = 0.0f;
+    left_boost = right_boost = 0.0f;
 }
 
 static void StopWithFault(Speed_Fault fault)
@@ -160,7 +174,7 @@ void SpeedControl_SetLaunchSync(uint8_t enabled)
 void SpeedControl_EnterParking(void)
 {
     if (!speed_control.running || !speed_control.differential_mode) { StopWithFault(SPEED_FAULT_BAD_TARGET);return; }
-    parking_mode=1U;launch_sync=0U;left_integral=right_integral=0.0f;
+    parking_mode=1U;launch_sync=0U;left_integral=right_integral=0.0f;left_boost=right_boost=0.0f;
 }
 void SpeedControl_EnterTurn(void)
 {
@@ -202,7 +216,8 @@ void SpeedControl_SetParkingTargets(float left, float right)
     speed_control.requested_left_cps=left;speed_control.requested_right_cps=right;
     speed_control.requested_cps=(left+right)*0.5f;
 }
-static int32_t ParkingWheel(float reference, float measured, float dt, float ff, float *integral)
+static int32_t ParkingWheel(float reference, float measured, float dt, float ff, float *integral,
+                            uint32_t stalled_ms, float *boost)
 {
     if (reference==0.0f) { *integral=0.0f;return 0; }
     float error=reference-measured;
@@ -211,6 +226,23 @@ static int32_t ParkingWheel(float reference, float measured, float dt, float ff,
     float pwm_limit=parking_mode==2U ? 65.0f : 40.0f;
     float integral_limit=parking_mode==2U ? 25.0f : 15.0f;
     float friction=parking_mode==2U ? 30.0f : 18.0f;
+    /* Preserve coarse-turn breakaway torque, but fade that feed-forward in
+     * the fine approach. A fixed 30% kick defeats a small yaw-rate command.
+     * The faded value can sit below static friction, so restore the kick while
+     * the wheel is genuinely stalled and fade it again once the wheel turns. */
+    if (parking_mode==2U)
+    {
+        float fade=Clamp((reference<0.0f ? -reference : reference)/MOTION_TURN_MIN_CPS,0.0f,1.0f);
+        if (stalled_ms>=MOTION_TURN_BREAKAWAY_MS)
+        {
+            *boost=Clamp(*boost+dt*1000.0f/(float)MOTION_TURN_BREAKAWAY_MS,0.0f,1.0f);
+        }
+        else
+        {
+            *boost=Clamp(*boost-dt*1000.0f/(float)MOTION_TURN_BOOST_RELEASE_MS,0.0f,1.0f);
+        }
+        friction*=fade+(1.0f-fade)*(*boost);
+    }
     float base=ff*reference+(reference>0.0f ? friction : -friction)+SPEED_KP*error;
     float next=Clamp(*integral+SPEED_KI*error*dt,-integral_limit,integral_limit);
     float proposed=base+next;
@@ -262,13 +294,21 @@ void SpeedControl_Update(uint32_t now_ms)
     }
     if ((uint32_t)(now_ms - start_ms) >= START_GRACE_MS)
     {
-        uint32_t no_feedback=parking_mode==2U ? 400U : (parking_mode ? 2000U : NO_FEEDBACK_MS);
-        if ((uint32_t)(now_ms - left_motion_ms) >= no_feedback)
+        uint32_t no_feedback=parking_mode==2U ? MOTION_TURN_NO_FEEDBACK_MS : (parking_mode ? 2000U : NO_FEEDBACK_MS);
+        /* A duty below stiction cannot turn the wheel, so silence there is
+         * expected, not a stall. Defer the verdict while the output is too weak
+         * to move the car; the motion clock itself keeps running so the boost
+         * search (which reads the same clock) is unaffected. */
+        uint8_t left_pushing = speed_control.left_pwm >= (int32_t)MOTION_STALL_MIN_PWM ||
+            speed_control.left_pwm <= -(int32_t)MOTION_STALL_MIN_PWM;
+        uint8_t right_pushing = speed_control.right_pwm >= (int32_t)MOTION_STALL_MIN_PWM ||
+            speed_control.right_pwm <= -(int32_t)MOTION_STALL_MIN_PWM;
+        if (left_pushing && (uint32_t)(now_ms - left_motion_ms) >= no_feedback)
         {
             StopWithFault(SPEED_FAULT_LEFT_NO_FEEDBACK);
             return;
         }
-        if ((uint32_t)(now_ms - right_motion_ms) >= no_feedback)
+        if (right_pushing && (uint32_t)(now_ms - right_motion_ms) >= no_feedback)
         {
             StopWithFault(SPEED_FAULT_RIGHT_NO_FEEDBACK);
             return;
@@ -335,8 +375,8 @@ void SpeedControl_Update(uint32_t now_ms)
     }
 
     if (parking_mode) {
-        speed_control.left_pwm=ParkingWheel(speed_control.left_reference_cps,speed_control.left_cps,dt,LEFT_FEED_FORWARD,&left_integral);
-        speed_control.right_pwm=ParkingWheel(speed_control.right_reference_cps,speed_control.right_cps,dt,RIGHT_FEED_FORWARD,&right_integral);
+        speed_control.left_pwm=ParkingWheel(speed_control.left_reference_cps,speed_control.left_cps,dt,LEFT_FEED_FORWARD,&left_integral,(uint32_t)(now_ms-left_motion_ms),&left_boost);
+        speed_control.right_pwm=ParkingWheel(speed_control.right_reference_cps,speed_control.right_cps,dt,RIGHT_FEED_FORWARD,&right_integral,(uint32_t)(now_ms-right_motion_ms),&right_boost);
     } else {
     speed_control.left_pwm = ControlWheel(speed_control.left_reference_cps, speed_control.left_cps,
                                           dt, LEFT_FEED_FORWARD, &left_integral);

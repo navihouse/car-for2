@@ -8,8 +8,11 @@ typedef enum { SEG_RUNNING, SEG_COMPLETE, SEG_FAULT, SEG_UNIMPLEMENTED } Mission
 typedef enum { EXIT_COMPLETE, EXIT_STOP, EXIT_FAULT } MissionExitReason;
 enum { SENSOR_GYRO = 1U, SENSOR_LINE = 2U };
 typedef enum { MOTION_FORWARD, MOTION_TURN, MOTION_BRAKE } MissionMotionMode;
+/* PHASE_ALIGN is reserved: the arcs used it for an in-place entry alignment,
+ * which is now a rolling corner inside PHASE_CAPTURE. The value stays so the
+ * diagnostic numbering (and read_mission.ps1) does not shift. */
 typedef enum { PHASE_IDLE, PHASE_STILL, PHASE_TURN, PHASE_SETTLE, PHASE_STRAIGHT,
-               PHASE_CAPTURE, PHASE_FOLLOW, PHASE_COMPLETE, PHASE_FAULT } MissionPhase;
+               PHASE_ALIGN, PHASE_CAPTURE, PHASE_FOLLOW, PHASE_COMPLETE, PHASE_FAULT } MissionPhase;
 enum { MOTION_KIND_TEST, MOTION_KIND_STRAIGHT, MOTION_KIND_ARC };
 enum { MOTION_FAULT_NONE, MOTION_FAULT_CONFIG, MOTION_FAULT_DISTANCE,
        MOTION_FAULT_TIMEOUT, MOTION_FAULT_TURN_TIMEOUT, MOTION_FAULT_TURN_DIRECTION,
@@ -41,10 +44,15 @@ typedef struct {
     float distance_mm, target_yaw_deg, heading_error_deg;
     float line_position, last_position, derivative;
     float left_target, right_target, recovery_left, recovery_right;
+    /* Dead-reckoned position since the arc handoff, in the frame of the entry
+     * tangent: +x forward, +y left. The capture uses it to steer onto the known
+     * semicircle while no probe sees black. */
+    float track_x, track_y, track_mm, track_origin_yaw_deg;
     float turn_origin_yaw, turn_start_error;
     uint32_t turn_started_ms, control_ms, line_sequence, have_line_sequence;
     uint32_t still_since_ms, still_tracking, corrections, uncertain, uncertain_ms;
     uint32_t capture_frames, capture_sequence, have_capture_sequence, have_position;
+    uint32_t have_track, capture_line_tracking;
 } MissionMotionState;
 typedef struct {
     MissionInput entry;

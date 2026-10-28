@@ -17,7 +17,7 @@ if ($DumpFile) {
     }
     if (-not (Test-Path -LiteralPath $ProgrammerPath)) { throw "Programmer missing: $ProgrammerPath" }
     # Read only. No flash, reset, halt, run or motor commands.
-    $lines = & $ProgrammerPath -c port=SWD mode=HOTPLUG -r32 ('0x' + $symbol.Groups[1].Value) 0x90 2>&1
+    $lines = & $ProgrammerPath -c port=SWD mode=HOTPLUG -r32 ('0x' + $symbol.Groups[1].Value) 0x98 2>&1
     if ($LASTEXITCODE -ne 0) { throw "ST-LINK read failed: $($lines -join ' ')" }
 }
 $words = [Collections.Generic.List[uint32]]::new()
@@ -29,16 +29,16 @@ foreach ($line in $lines) {
         }
     }
 }
-if ($words.Count -ne 36) { throw "Incomplete mission V2 record: $($words.Count)/36 words." }
-if ($words[0] -ne 0x4D534E31 -or $words[1] -ne 2) { throw 'Wrong mission magic/version; this reader requires V2.' }
-if (($words[2] -band 1) -or $words[2] -ne $words[35]) { throw 'Mission snapshot changed during read; retry.' }
+if ($words.Count -ne 38) { throw "Incomplete mission V3 record: $($words.Count)/38 words." }
+if ($words[0] -ne 0x4D534E31 -or $words[1] -ne 3) { throw 'Wrong mission magic/version; this reader requires V3.' }
+if (($words[2] -band 1) -or $words[2] -ne $words[37]) { throw 'Mission snapshot changed during read; retry.' }
 $modes = @('FULL','AC','CB','BD','DA')
 $states = @('IDLE','RUNNING','DONE','STOPPED','REJECTED','FAULT')
 $segments = @('AC','CB','BD','DA')
 $reasons = @('READY','NOT_IMPLEMENTED','USER_STOP','BAD_CONFIG','BAD_TARGET','SEGMENT_FAULT',
     'GYRO_UNAVAILABLE','LINE_UNAVAILABLE','ENCODER_STALE','SPEED_FAULT','CALIBRATING')
 $points = @('NONE','A','B','C','D')
-$phases = @('IDLE','STILL','TURN','SETTLE','STRAIGHT','CAPTURE','FOLLOW','COMPLETE','FAULT')
+$phases = @('IDLE','STILL','TURN','SETTLE','STRAIGHT','ALIGN','CAPTURE','FOLLOW','COMPLETE','FAULT')
 $motionModes = @('FORWARD','TURN','BRAKE')
 $motionFaults = @('NONE','CONFIG','DISTANCE','TIMEOUT','TURN_TIMEOUT','TURN_DIRECTION',
     'TURN_TRANSLATION','GYRO_RESPONSE','WHEEL_SYNC','HEADING','CAPTURE','NO_LINE','AMBIGUOUS')
@@ -62,6 +62,7 @@ $record = [pscustomobject][ordered]@{
     Target_yaw_deg = (Signed-Word $words[28]) / 1000.0; Heading_error_deg = (Signed-Word $words[29]) / 1000.0
     Line_position = Signed-Word $words[30]; Point_confirm_frames = $words[31]
     Turn_corrections = $words[32]; Nominal_mm = Signed-Word $words[33]; Capture_frames = $words[34]
+    Lap = $words[35]; Drift_mdeg = Signed-Word $words[36]
 }
 if ($record.Reason -eq 'SEGMENT_FAULT' -and $words[7] -lt $motionFaults.Count) {
     $record | Add-Member -NotePropertyName Motion_fault -NotePropertyValue $motionFaults[$words[7]]

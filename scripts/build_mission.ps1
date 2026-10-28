@@ -13,14 +13,23 @@ if (-not (Test-Path -LiteralPath (Join-Path $ArmBin 'arm-none-eabi-gcc.exe'))) {
 if (-not (Test-Path -LiteralPath $Ninja)) { throw "Ninja missing: $Ninja" }
 $taskOldPath = $env:PATH
 Push-Location -LiteralPath $taskRoot
+# Native tools write status to stderr; 'Stop' would turn that into a terminating
+# error. Keep 'Continue' around native calls and judge them by $LASTEXITCODE.
+$taskStop = $ErrorActionPreference
 try {
     $env:PATH = "$ArmBin;$(Split-Path -Parent $Ninja);$taskOldPath"
+    $ErrorActionPreference = 'Continue'
     & cmake --preset $taskPreset -B $taskBuild "-DMISSION_MODE=$Mode" "-DCMAKE_MAKE_PROGRAM:FILEPATH=$Ninja"
-    if ($LASTEXITCODE -ne 0) { throw 'ARM configure failed.' }
-    & cmake --build $taskBuild --parallel 4
-    if ($LASTEXITCODE -ne 0) { throw 'ARM build failed.' }
-    Write-Output "Firmware: $(Join-Path $taskBuild 'C10B_Test.elf')"
+    $taskConfigureExit = $LASTEXITCODE
+    if ($taskConfigureExit -eq 0) {
+        & cmake --build $taskBuild --parallel 4
+    }
+    $taskBuildExit = $LASTEXITCODE
 } finally {
+    $ErrorActionPreference = $taskStop
     $env:PATH = $taskOldPath
     Pop-Location
 }
+if ($taskConfigureExit -ne 0) { throw 'ARM configure failed.' }
+if ($taskBuildExit -ne 0) { throw 'ARM build failed.' }
+Write-Output "Firmware: $(Join-Path $taskBuild 'C10B_Test.elf')"

@@ -71,7 +71,8 @@ void SpeedControl_EnterParking(void);
  * than clearing learned drive effort. No encoder/filter/reference reset. */
 void SpeedControl_EnterParkingContinuous(void);
 /* In-place turn: opposite signed targets <=1200 cps, paired encoder travel
- * synchronization, PWM <=65%, and 400 ms no-feedback after startup grace. */
+ * synchronization, PWM <=65%, and MOTION_TURN_NO_FEEDBACK_MS without feedback
+ * after startup grace. The faded fine-approach kick returns while a wheel stalls. */
 void SpeedControl_EnterTurn(void);
 void SpeedControl_SetTurnTargets(float left_cps, float right_cps);
 void SpeedControl_SetParkingTargets(float left_cps, float right_cps);

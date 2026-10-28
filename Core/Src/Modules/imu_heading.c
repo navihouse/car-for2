@@ -1,54 +1,53 @@
 #include "imu_heading.h"
-/* MPU6050: gyro FS_SEL=0 (131 LSB/dps), accelerometer AFS_SEL=0.
- * Relative yaw around sensor Z only; module must lie flat on the car.
- * No accelerometer-derived heading or fictitious absolute yaw correction. */
+#include "imu_config.h"
+#include <math.h>
+/* car-02- uses the installed sensor's measured Z reference to identify
+ * stillness, then estimates the actual bias on every boot. Acceleration is
+ * diagnostic only: yaw is relative rotation around the sensor's vertical Z. */
 static int32_t AbsRaw(int16_t value) { return value<0 ? -(int32_t)value : value; }
 void ImuHeading_Reset(ImuHeading *h) { *h=(ImuHeading){0}; }
 static void RestartWindow(ImuHeading *h, uint32_t reason)
 {
     h->samples=0U;h->mean_z=h->m2_z=0.0f;h->restarts++;h->reject_reason=reason;
 }
-uint32_t ImuHeading_Sample(ImuHeading *h, const int16_t accel[3], const int16_t gyro[3], uint32_t now_ms)
+uint32_t ImuHeading_Sample(ImuHeading *h, int16_t gyro_z, uint8_t wheels_still, uint32_t now_ms)
 {
     uint32_t dt=h->have_time ? now_ms-h->last_ms : 0U;
     if (h->have_time && !dt) return h->ready ? HEADING_READY : HEADING_CALIBRATING;
     h->last_ms=now_ms;h->have_time=1U;
+    if ((float)AbsRaw(gyro_z)>IMU_GYRO_MAX_ABS_DPS*IMU_GYRO_LSB_PER_DPS) { h->ready=0U;return HEADING_SATURATED; }
     if (h->ready) {
-        if (dt>30U) { h->ready=0U;return HEADING_GAP; }
-        for (uint32_t i=0;i<3;i++) if (AbsRaw(gyro[i])>=32700) { h->ready=0U;return HEADING_SATURATED; }
-        h->rate_dps=((float)gyro[2]-h->bias_raw)/131.0f;
+        if (dt>IMU_MAX_SAMPLE_GAP_MS) { h->ready=0U;return HEADING_GAP; }
+        h->rate_dps=((float)gyro_z-h->bias_raw)/IMU_GYRO_LSB_PER_DPS;
         h->yaw_deg+=(h->previous_rate+h->rate_dps)*0.0005f*(float)dt;
         h->previous_rate=h->rate_dps;
         return HEADING_READY;
     }
-    if (dt>30U && h->samples) RestartWindow(h,3U);
-    uint8_t moving=0U;
-    for (uint32_t i=0;i<3;i++) if (AbsRaw(gyro[i])>655) moving=1U;
-    if (moving) { RestartWindow(h,1U);return HEADING_CALIBRATING; }
-    if (AbsRaw(accel[0])>4000 || AbsRaw(accel[1])>4000 || AbsRaw(accel[2])<14000 || AbsRaw(accel[2])>18500) {
-        RestartWindow(h,2U);return HEADING_CALIBRATING;
+    if (dt>IMU_MAX_SAMPLE_GAP_MS && h->samples) RestartWindow(h,3U);
+    if (!wheels_still) { RestartWindow(h,2U);return HEADING_CALIBRATING; }
+    float z_dps=(float)gyro_z/IMU_GYRO_LSB_PER_DPS;
+    if (!isfinite(IMU_Z_BIAS_PRIOR_DPS) ||
+        fabsf(z_dps-IMU_Z_BIAS_PRIOR_DPS)>IMU_CAL_WINDOW_DPS) {
+        RestartWindow(h,1U);return HEADING_CALIBRATING;
     }
-    if (!h->samples) {
-        h->first_ms=now_ms;
-        for (uint32_t i=0;i<3;i++) h->low[i]=h->high[i]=(float)gyro[i];
-    }
-    for (uint32_t i=0;i<3;i++) {
-        if ((float)gyro[i]<h->low[i]) h->low[i]=(float)gyro[i];
-        if ((float)gyro[i]>h->high[i]) h->high[i]=(float)gyro[i];
-        if (h->high[i]-h->low[i]>196.5f) { RestartWindow(h,1U);return HEADING_CALIBRATING; }
-    }
+    if (!h->samples) h->first_ms=now_ms;
     h->samples++;
-    float delta=(float)gyro[2]-h->mean_z;
+    float delta=(float)gyro_z-h->mean_z;
     h->mean_z+=delta/(float)h->samples;
-    h->m2_z+=delta*((float)gyro[2]-h->mean_z);
-    if (h->samples>=200U && (uint32_t)(now_ms-h->first_ms)>=1900U) {
-        if (h->m2_z/(float)h->samples>1544.49f) { RestartWindow(h,1U);return HEADING_CALIBRATING; }
+    h->m2_z+=delta*((float)gyro_z-h->mean_z);
+    if (h->samples>=IMU_CAL_SAMPLES && (uint32_t)(now_ms-h->first_ms)>=IMU_CAL_MIN_MS) {
+        float max_variance=IMU_CAL_STD_DPS*IMU_GYRO_LSB_PER_DPS;
+        max_variance*=max_variance;
+        if (h->m2_z/(float)(h->samples-1U)>max_variance) {
+            RestartWindow(h,1U);return HEADING_CALIBRATING;
+        }
         h->bias_raw=h->mean_z;h->yaw_deg=0.0f;
-        h->rate_dps=((float)gyro[2]-h->bias_raw)/131.0f;
+        h->rate_dps=((float)gyro_z-h->bias_raw)/IMU_GYRO_LSB_PER_DPS;
         h->previous_rate=h->rate_dps;h->ready=1U;h->reject_reason=0U;
     }
     return h->ready ? HEADING_READY : HEADING_CALIBRATING;
 }
+
 void ImuHeading_Zero(ImuHeading *h) { if (h->ready) h->yaw_deg=0.0f; }
 
 void GyroCheck_Reset(GyroCheck *h) { *h=(GyroCheck){0}; }
@@ -80,7 +79,7 @@ void GyroCheck_Sample(GyroCheck *h,const int16_t gyro[3],uint32_t now_ms)
     if (dt>30U) { GyroCheck_Fail(h,GYRO_TEST_GAP);return; }
     for (uint32_t i=0;i<3U;i++) if (AbsRaw(gyro[i])>=32700) { GyroCheck_Fail(h,GYRO_TEST_RAIL);return; }
     if (h->state==GYRO_TEST_READOUT) {
-        h->rate=((float)gyro[2]-h->bias)/131.0f;
+        h->rate=((float)gyro[2]-h->bias)/IMU_GYRO_LSB_PER_DPS;
         h->yaw+=(h->previous_rate+h->rate)*0.0005f*(float)dt;h->previous_rate=h->rate;
         if (h->yaw>36000.0f || h->yaw< -36000.0f) GyroCheck_Fail(h,GYRO_TEST_RANGE);
         return;
@@ -97,13 +96,13 @@ void GyroCheck_Sample(GyroCheck *h,const int16_t gyro[3],uint32_t now_ms)
     for (uint32_t i=0;i<3U;i++) {
         if ((float)gyro[i]<h->low[i]) h->low[i]=(float)gyro[i];
         if ((float)gyro[i]>h->high[i]) h->high[i]=(float)gyro[i];
-        if (h->high[i]-h->low[i]>196.5f) { GyroCheck_Restart(h);return; }
+        if (h->high[i]-h->low[i]>1.5f*IMU_GYRO_LSB_PER_DPS) { GyroCheck_Restart(h);return; }
     }
     h->samples++;float delta=(float)gyro[2]-h->mean;
     h->mean+=delta/(float)h->samples;h->m2+=delta*((float)gyro[2]-h->mean);
     if (h->samples>=400U && (uint32_t)(now_ms-h->first_ms)>=3900U) {
-        if (h->m2/(float)h->samples>1544.49f) { GyroCheck_Restart(h);return; }
-        h->bias=h->mean;h->rate=((float)gyro[2]-h->bias)/131.0f;
+        if (h->m2/(float)h->samples>0.09f*IMU_GYRO_LSB_PER_DPS*IMU_GYRO_LSB_PER_DPS) { GyroCheck_Restart(h);return; }
+        h->bias=h->mean;h->rate=((float)gyro[2]-h->bias)/IMU_GYRO_LSB_PER_DPS;
         h->previous_rate=h->rate;h->yaw=0.0f;h->zero_ms=now_ms;h->state=GYRO_TEST_READOUT;
     }
 }

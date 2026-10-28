@@ -76,6 +76,12 @@ static void StraightTests(void)
     out=MotionStraight_Update(&ctx,&in,p); assert(out.left_cps<out.right_cps); /* steer left */
     in.yaw_deg=p->target_yaw_deg+2.0f; in.now_ms+=20U;
     out=MotionStraight_Update(&ctx,&in,p); assert(out.left_cps>out.right_cps); /* steer right */
+    /* Last stretch before the point hands the arc its entry speed. */
+    const int32_t approach=(int32_t)((p->nominal_mm-20.0f)*MOTION_LEFT_COUNTS_PER_MM);
+    in.left_counts=400+approach; in.right_counts=-400+approach;
+    in.yaw_deg=p->target_yaw_deg; in.now_ms+=20U;
+    out=MotionStraight_Update(&ctx,&in,p);
+    assert(out.left_cps<p->cruise_cps && out.left_cps>MOTION_STRAIGHT_HANDOFF_CPS);
     in.left_counts+=11000; in.right_counts+=11000;
     out=MotionStraight_Update(&ctx,&in,p); assert(out.status==SEG_FAULT && out.fault==MOTION_FAULT_DISTANCE);
 
@@ -88,7 +94,7 @@ static void StraightTests(void)
     /* Fixed route heading does not absorb an erroneous B arrival. */
     in=Fresh(); in.yaw_deg=170.0f; ctx=Context(&in);
     (void)MotionStraight_Enter(&ctx,&in,p);
-    assert(fabsf(ctx.motion.heading_error_deg-48.66f)<0.01f);
+    assert(fabsf(ctx.motion.heading_error_deg-Motion_WrapDegrees(p->target_yaw_deg-170.0f))<0.01f);
 }
 static void ArcTests(void)
 {
@@ -96,12 +102,19 @@ static void ArcTests(void)
     MissionInput in=Fresh(); in.line_mask=0x18U; in.line_strength[3]=in.line_strength[4]=1000U;
     MissionSegmentContext ctx=Context(&in);
     MissionSegmentOutput out=MotionArc_Enter(&ctx,&in,p);
-    assert(ctx.phase==PHASE_CAPTURE && out.left_cps==600.0f && out.right_cps==600.0f);
+    assert(ctx.phase==PHASE_CAPTURE && out.left_cps==p->capture_cps && out.right_cps==p->capture_cps);
     for(uint32_t i=0;i<100U;++i) (void)MotionArc_Update(&ctx,&in,p);
     assert(ctx.motion.capture_frames==1U);
     Frame(&in,0x18U); (void)MotionArc_Update(&ctx,&in,p);
     Frame(&in,0x18U); out=MotionArc_Update(&ctx,&in,p);
-    assert(ctx.phase==PHASE_FOLLOW && out.left_cps==900.0f);
+    /* Centred line in FOLLOW: the arc differential is already made by the
+     * curvature feed-forward, so the wheels are biased against each other
+     * instead of running equal, and the PD only spends what is left. Right
+     * wheel leads: this course runs its semicircles counter-clockwise. */
+    assert(ctx.phase==PHASE_FOLLOW);
+    float differential=out.right_cps-out.left_cps;
+    float arc_differential=-2.0f*MOTION_LINE_CURVATURE_FF*p->cruise_cps;
+    assert(fabsf(differential-arc_differential)<5.0f);
     Frame(&in,0x20U); in.now_ms+=20U; out=MotionArc_Update(&ctx,&in,p);
     assert(out.left_cps>out.right_cps); /* black right -> turn right */
     Frame(&in,0x04U); in.now_ms+=20U; out=MotionArc_Update(&ctx,&in,p);
@@ -114,11 +127,35 @@ static void ArcTests(void)
     in=Fresh(); Frame(&in,0x18U); ctx=Context(&in); (void)MotionArc_Enter(&ctx,&in,p);
     Frame(&in,0U); out=MotionArc_Update(&ctx,&in,p); assert(out.status==SEG_RUNNING);
     Frame(&in,0x18U); out=MotionArc_Update(&ctx,&in,p); assert(out.status==SEG_RUNNING && !ctx.motion.uncertain);
-    in.now_ms=ctx.entry.now_ms+1501U; out=MotionArc_Update(&ctx,&in,p);
+    in.now_ms=ctx.entry.now_ms+MOTION_CAPTURE_TIMEOUT_MS+1U; out=MotionArc_Update(&ctx,&in,p);
     assert(out.status==SEG_FAULT && out.fault==MOTION_FAULT_CAPTURE);
     /* Distance capture cap is independent of its time cap. */
     in=Fresh(); Frame(&in,0x01U); ctx=Context(&in); (void)MotionArc_Enter(&ctx,&in,p);
-    in.left_counts=in.right_counts=1400; out=MotionArc_Update(&ctx,&in,p);
+    const int32_t cap_counts=(int32_t)((MOTION_CAPTURE_MAX_MM+40.0f)*MOTION_LEFT_COUNTS_PER_MM);
+    in.left_counts=in.right_counts=cap_counts; out=MotionArc_Update(&ctx,&in,p);
+    assert(out.status==SEG_FAULT && out.fault==MOTION_FAULT_CAPTURE);
+    /* Real-track dropout, exactly what the car did at C: only the bar it just
+     * crossed is black, the arc line sits off to the side, and 38.66 deg of
+     * entry tangent is still owed. The car must keep steering on the gyro -
+     * never run straight - and must not fault while the tangent is owed. */
+    in=Fresh(); in.yaw_deg=-38.66f; ctx=Context(&in); ctx.from_handoff=1U;
+    out=MotionArc_Enter(&ctx,&in,p);
+    for(uint32_t i=0;i<25U;++i) {
+        Frame(&in,0U);
+        out=MotionArc_Update(&ctx,&in,p);
+        assert(out.status==SEG_RUNNING && out.mode==MOTION_FORWARD);
+        assert(fabsf(out.right_cps-out.left_cps)>=MOTION_LINE_MIN_WHEEL_CPS*2.0f);
+    }
+    /* Reaching the tangent does not re-arm NO_LINE: a rolling entry keeps
+     * steering the known semicircle until the capture budget is spent, and the
+     * budget - not a 350 ms dropout - is what reports the failure. */
+    in.yaw_deg=0.0f;
+    for(uint32_t i=0;i<12U;++i) {
+        Frame(&in,0U); out=MotionArc_Update(&ctx,&in,p);
+        assert(out.status==SEG_RUNNING || out.fault==MOTION_FAULT_CAPTURE);
+    }
+    in.now_ms=ctx.entry.now_ms+MOTION_CAPTURE_TIMEOUT_MS+1U;
+    out=MotionArc_Update(&ctx,&in,p);
     assert(out.status==SEG_FAULT && out.fault==MOTION_FAULT_CAPTURE);
     /* Expected arc exit wins over the normal 100ms no-line protection. */
     in=Fresh(); Frame(&in,0x18U); ctx=Context(&in); ctx.from_handoff=1U;
@@ -159,6 +196,85 @@ static void TurnFailureTests(void)
     out=MotionStraight_Update(&ctx,&in,p);
     assert(out.mode==MOTION_TURN && ctx.motion.corrections==3U);
 }
+static void TurnApproachTests(void)
+{
+    const MissionSegmentParams *p=mission_segment_ac.params;
+    for (int sign=-1;sign<=1;sign+=2) {
+        MissionInput in=Fresh();in.yaw_deg=p->target_yaw_deg-(float)sign*5.0f;
+        MissionSegmentContext ctx=Context(&in);
+        (void)MotionStraight_Enter(&ctx,&in,p);(void)MotionStraight_Update(&ctx,&in,p);
+        in.now_ms=500U;MissionSegmentOutput out=MotionStraight_Update(&ctx,&in,p);
+        assert(out.mode==MOTION_TURN);
+        /* 5 degrees out: the rate feed-forward alone is 16 cps per deg/s times
+         * KP*5, and the approach floor keeps the low end. Well inside the
+         * approach regime, nowhere near the full speed kick. */
+        assert(fabsf(out.left_cps)>MOTION_TURN_APPROACH_MIN_CPS);
+        assert(fabsf(out.left_cps)<0.5f*MOTION_TURN_MAX_CPS && fabsf(out.right_cps)<0.5f*MOTION_TURN_MAX_CPS);
+        assert(out.left_cps*(float)sign<0.0f && out.right_cps*(float)sign>0.0f);
+        /* Moving away must not receive predictive early braking. */
+        in.yaw_deg=p->target_yaw_deg-(float)sign*2.8f;in.yaw_rate_dps=-(float)sign*40.0f;
+        in.now_ms+=20U;out=MotionStraight_Update(&ctx,&in,p);assert(out.mode==MOTION_TURN);
+        /* Moving towards the target brakes inside tolerance before crossing. */
+        in.yaw_rate_dps=(float)sign*40.0f;in.now_ms+=20U;
+        out=MotionStraight_Update(&ctx,&in,p);
+        assert(out.mode==MOTION_BRAKE && ctx.phase==PHASE_SETTLE);
+        in.yaw_rate_dps=0.0f;in.now_ms+=20U;(void)MotionStraight_Update(&ctx,&in,p);
+        in.now_ms+=MOTION_SETTLE_MS;out=MotionStraight_Update(&ctx,&in,p);
+        assert(out.mode==MOTION_FORWARD && ctx.phase==PHASE_STRAIGHT && !ctx.motion.corrections);
+    }
+}
+static void CaptureHandoffTests(void)
+{
+    const MissionSegmentParams *p=mission_segment_cb.params;
+    MissionInput in=Fresh();Frame(&in,0xFFU);in.yaw_deg=MOTION_AC_TARGET_DEG;
+    MissionSegmentContext ctx=Context(&in);ctx.from_handoff=1U;
+    MissionSegmentOutput out=MotionArc_Enter(&ctx,&in,p);
+    /* The diagonal leaves C on the AC heading; CB's entry tangent is 0 deg, so
+       the capture steers the corner away while both wheels keep rolling. */
+    assert(out.status==SEG_RUNNING && ctx.phase==PHASE_CAPTURE && out.mode==MOTION_FORWARD);
+    assert(out.left_cps>0.0f && out.right_cps>out.left_cps);
+    const float entry_cap=fminf(MOTION_CAPTURE_HEADING_MAX_CPS,
+        fmaxf(p->capture_cps-MOTION_LINE_MIN_WHEEL_CPS,0.0f));
+    const float entry_trim=fminf(MOTION_CAPTURE_HEADING_KP*fabsf(MOTION_AC_TARGET_DEG),entry_cap);
+    assert(fabsf((out.right_cps-out.left_cps)-2.0f*entry_trim)<2.0f);
+    in.yaw_deg=0.0f;in.yaw_rate_dps=0.0f;
+    out=MotionArc_Update(&ctx,&in,p);
+    assert(out.status==SEG_RUNNING && ctx.phase==PHASE_CAPTURE);
+    assert(ctx.motion.capture_frames==0U); /* Wide stripe cannot certify capture. */
+    for (uint32_t i=0;i<MOTION_CAPTURE_CONFIRM_FRAMES;i++) {
+        Frame(&in,0x18U);out=MotionArc_Update(&ctx,&in,p);
+    }
+    assert(ctx.phase==PHASE_FOLLOW && out.status==SEG_RUNNING);
+    /* Wide masks still fault during normal following. */
+    Frame(&in,0xFFU);out=MotionArc_Update(&ctx,&in,p);assert(out.status==SEG_RUNNING);
+    in.now_ms+=MOTION_LINE_UNCERTAIN_MS;out=MotionArc_Update(&ctx,&in,p);
+    assert(out.status==SEG_FAULT && out.fault==MOTION_FAULT_AMBIGUOUS);
+
+    p=mission_segment_da.params;in=Fresh();Frame(&in,0xFFU);in.yaw_deg=MOTION_BD_TARGET_DEG;
+    ctx=Context(&in);ctx.from_handoff=1U;out=MotionArc_Enter(&ctx,&in,p);
+    /* DA is the mirror image: tangent 180 deg, the bias steers the other way. */
+    assert(out.status==SEG_RUNNING && ctx.phase==PHASE_CAPTURE && out.mode==MOTION_FORWARD);
+    assert(out.left_cps>0.0f && out.right_cps>0.0f && out.left_cps>out.right_cps);
+    in.yaw_deg=180.0f;in.yaw_rate_dps=0.0f;
+    out=MotionArc_Update(&ctx,&in,p);
+    assert(out.status==SEG_RUNNING && ctx.phase==PHASE_CAPTURE);
+    Frame(&in,0U);out=MotionArc_Update(&ctx,&in,p);
+    assert(out.status==SEG_RUNNING);
+    in.now_ms+=MOTION_LINE_UNCERTAIN_MS;out=MotionArc_Update(&ctx,&in,p);
+    assert(out.status==SEG_RUNNING); /* Capture has its own bounded search grace. */
+    /* Rolling capture keeps searching past the no-line grace - it steers the
+     * known semicircle instead - so only the capture budget ends the search. */
+    in.now_ms=ctx.phase_started_ms+MOTION_CAPTURE_TIMEOUT_MS+1U;
+    out=MotionArc_Update(&ctx,&in,p);assert(out.status==SEG_FAULT && out.fault==MOTION_FAULT_CAPTURE);
+
+    /* A wide stripe can never bypass the absolute capture timeout. */
+    in=Fresh();Frame(&in,0xFFU);in.yaw_deg=p->target_yaw_deg-180.0f; /* Already on the tangent. */
+    ctx=Context(&in);ctx.from_handoff=1U;
+    (void)MotionArc_Enter(&ctx,&in,p);
+    assert(ctx.phase==PHASE_CAPTURE);
+    in.now_ms=ctx.phase_started_ms+MOTION_CAPTURE_TIMEOUT_MS+1U;
+    out=MotionArc_Update(&ctx,&in,p);assert(out.status==SEG_FAULT && out.fault==MOTION_FAULT_CAPTURE);
+}
 static void ConfigTests(void)
 {
     MissionSegmentParams p=*mission_segment_ac.params;
@@ -174,7 +290,7 @@ static void ConfigTests(void)
 }
 int main(void)
 {
-    assert(Motion_ValidateTuning()); EdgeTests(); DistanceTests(); StraightTests(); ArcTests(); TurnFailureTests(); ConfigTests();
+    assert(Motion_ValidateTuning()); EdgeTests(); DistanceTests(); StraightTests(); ArcTests(); TurnFailureTests(); TurnApproachTests(); CaptureHandoffTests(); ConfigTests();
     assert(Motion_WrapDegrees(218.66f)<0.0f);
     puts("actual motion: edge windows, distinct frames, per-leg distance, turn/heading/line PD and faults passed");
     return 0;

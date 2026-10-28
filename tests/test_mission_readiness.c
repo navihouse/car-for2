@@ -7,7 +7,7 @@ int main(void)
     fake_pressed=0U; Mission_Init(0U);
     assert(mission_diag.state==MISSION_IDLE && !speed_control.running);
     assert(!fake_starts && !fake_motor_writes && !fake_notifications);
-    assert(mission_diag.mode==MISSION_BUILD_MODE && mission_diag.version==2U);
+    assert(mission_diag.mode==MISSION_BUILD_MODE && mission_diag.version==3U);
     /* Every actual leg needs calibrated, fresh gray data, even on white. */
     fake_input.line_calibrated=0U; assert(!Mission_Start(1U));
     assert(mission_diag.reason==MISSION_LINE_UNAVAILABLE && !fake_starts);
