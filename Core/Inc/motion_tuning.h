@@ -43,6 +43,12 @@
  * Angles are course headings, not an increment from a possibly wrong arrival.
  * Identification windows are inclusive. Nominal lengths do NOT end a segment. */
 #define MOTION_AC_TARGET_DEG (-38.66f)
+/* First A launch above assumes the car faces east. At later A crossings the
+ * probe reaches the endpoint while the chassis may still be on the arc.
+ * Independent return-A course heading: 2026-11-03 user requested 7 deg less
+ * right rotation than before. Keep it through AC cruise, not just the turn.
+ * Both are absolute course headings; actual rotation uses the live gyro yaw. */
+#define MOTION_AC_RETURN_TARGET_DEG (-31.66f)
 /* B点航向修正：2026-10-28 根据实车反馈先收回 5°；2026-11-03 先再减小
  * 1.5° 后再减小 2°；随后用户反馈 D 点灰度未正对黑线，要求调大 30′=0.5°，
  * 累计偏移 -8°。BD 目标为 210.66°，从朝左 180° 起标称左转 30.66°，

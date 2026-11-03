@@ -142,8 +142,8 @@ MissionOutput MissionControl_Update(MissionControl *m, const MissionInput *in)
              * re-zeroing here would re-anchor the frame to the pose the car held
              * at the crossing, and every later AC leg would inherit that error -
              * the field run measured 21 deg, which sent the next diagonal into
-             * the CB arc. Absolute headings self-correct instead, because the
-             * next A turn simply turns further to reach the fixed -38.66 deg. */
+             * the CB arc. The AC descriptor selects an independent return-A
+             * target in this same course frame, using the live gyro error. */
             float residual = Motion_WrapDegrees(MOTION_YAW_SIGN * (in->yaw_deg - m->course_origin_deg));
             m->drift_mdeg += (int32_t)(residual * 1000.0f);
 #if MISSION_LAP_ORIGIN_RESET

@@ -46,6 +46,39 @@ static void Init(MissionControl *m, MissionSegment segments[4], const MissionSeg
     /* The fake route is single-lap; the FULL lap roll-over has its own case. */
     m->laps_override=1U;
 }
+static void ReturnASelectionTests(void)
+{
+    MissionControl m; MissionSegment s[4]; const MissionSegment *table[4];
+    MissionInput in=Fresh(0U);
+    Init(&m,s,table,MISSION_MODE_FULL); m.laps_override=4U;
+    /* Real AC entry/validation, synthetic segment completions: exercise the
+     * scheduler's handoff flag for every lap without inventing wheel feedback. */
+    s[0]=mission_segment_ac; s[0].Update=FakeUpdate;
+    MissionOutput out=MissionControl_Start(&m,&in);
+    assert(out.mode==MOTION_BRAKE && m.state==MISSION_RUNNING);
+    assert(!m.contexts[0].from_handoff);
+    assert(fabsf(m.contexts[0].motion.target_yaw_deg-MOTION_AC_TARGET_DEG)<0.001f);
+    const float origin=m.course_origin_deg;
+    update_status=SEG_COMPLETE;
+    for(uint32_t i=0U;i<16U;++i) {
+        in.now_ms+=20U;
+        if(i%4U==3U) in.yaw_deg=origin+(360.0f*(float)(i/4U+1U)+23.0f)/MOTION_YAW_SIGN;
+        out=MissionControl_Update(&m,&in);
+        if(i%4U==3U && i<15U) {
+            assert(out.point==POINT_A && out.mode==MOTION_BRAKE);
+            assert(m.segment==SEGMENT_AC && m.contexts[0].from_handoff);
+            assert(m.contexts[0].phase==PHASE_STILL && m.lap==i/4U+1U);
+            assert(m.course_origin_deg==origin);
+            assert(fabsf(m.contexts[0].motion.target_yaw_deg-MOTION_AC_RETURN_TARGET_DEG)<0.001f);
+        }
+    }
+    assert(m.state==MISSION_DONE && out.action==DRIVE_STOP && m.arrivals==16U);
+    /* Restart is a new launch, even after all three return-A entries. */
+    out=MissionControl_Start(&m,&in);
+    assert(m.state==MISSION_RUNNING && !m.lap && !m.contexts[0].from_handoff);
+    assert(out.mode==MOTION_BRAKE);
+    assert(fabsf(m.contexts[0].motion.target_yaw_deg-MOTION_AC_TARGET_DEG)<0.001f);
+}
 int main(void)
 {
     MissionControl m; MissionSegment s[4]; const MissionSegment *table[4];
@@ -161,6 +194,7 @@ int main(void)
     out=MissionControl_Start(&m,&in); assert(out.action==DRIVE_STOP && m.reason==MISSION_BAD_TARGET);
     Init(&m,s,table,0U); fake_mode=(MissionMotionMode)99;
     assert(MissionControl_Start(&m,&in).action==DRIVE_STOP);
+    ReturnASelectionTests();
     puts("mission control: route, drive profiles, continuous handoff, rejection, faults and rollover passed");
     return 0;
 }

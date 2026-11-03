@@ -96,6 +96,46 @@ static void StraightTests(void)
     (void)MotionStraight_Enter(&ctx,&in,p);
     assert(fabsf(ctx.motion.heading_error_deg-Motion_WrapDegrees(p->target_yaw_deg-170.0f))<0.01f);
 }
+static void ReturnATurnTests(void)
+{
+    const MissionSegment *ac=&mission_segment_ac;
+    assert(ac->Validate(ac->params));
+    for(uint32_t returning=0U;returning<2U;++returning) {
+        MissionInput in=Fresh();
+        const float origin=37.0f;
+        in.yaw_deg=origin+(returning ? 383.0f : 0.0f)/MOTION_YAW_SIGN;
+        MissionSegmentContext ctx=Context(&in);
+        ctx.course_origin_deg=origin; ctx.from_handoff=returning;
+        MissionSegmentOutput out=ac->Enter(&ctx,&in,ac->params);
+        const float goal=returning ? MOTION_AC_RETURN_TARGET_DEG : MOTION_AC_TARGET_DEG;
+        assert(out.mode==MOTION_BRAKE && ctx.phase==PHASE_STILL);
+        assert(fabsf(ctx.motion.target_yaw_deg-goal)<0.001f);
+        /* Roll another 2 deg during braking. The turn uses the stopped yaw,
+         * rather than freezing an incremental angle at the probe crossing. */
+        if(returning) in.yaw_deg+=2.0f/MOTION_YAW_SIGN;
+        (void)ac->Update(&ctx,&in,ac->params);
+        in.now_ms+=MOTION_STILL_MS; out=ac->Update(&ctx,&in,ac->params);
+        assert(out.mode==MOTION_TURN && out.left_cps>0.0f && out.right_cps<0.0f);
+        const float stopped_yaw=returning ? 25.0f : 0.0f;
+        assert(fabsf(ctx.motion.turn_start_error-Motion_WrapDegrees(goal-stopped_yaw))<0.001f);
+        if(returning) {
+            float old_error=Motion_WrapDegrees(MOTION_AC_TARGET_DEG-stopped_yaw);
+            assert(fabsf(ctx.motion.turn_start_error-old_error-
+                (MOTION_AC_RETURN_TARGET_DEG-MOTION_AC_TARGET_DEG))<0.001f);
+        }
+        in.now_ms+=20U;
+        in.yaw_deg=origin+(goal+(returning ? 360.0f : 0.0f))/MOTION_YAW_SIGN;
+        out=ac->Update(&ctx,&in,ac->params);
+        assert(out.mode==MOTION_BRAKE && ctx.phase==PHASE_SETTLE);
+        in.now_ms+=20U; (void)ac->Update(&ctx,&in,ac->params);
+        in.now_ms+=MOTION_SETTLE_MS; out=ac->Update(&ctx,&in,ac->params);
+        assert(out.mode==MOTION_FORWARD && ctx.phase==PHASE_STRAIGHT);
+        assert(fabsf(out.left_cps-out.right_cps)<0.01f);
+        assert(fabsf(ctx.motion.heading_error_deg)<0.001f && !ctx.motion.corrections);
+        assert(ctx.course_origin_deg==origin);
+    }
+    assert(ac->params->target_yaw_deg==MOTION_AC_TARGET_DEG);
+}
 static void ArcTests(void)
 {
     const MissionSegmentParams *p=mission_segment_cb.params;
@@ -290,7 +330,7 @@ static void ConfigTests(void)
 }
 int main(void)
 {
-    assert(Motion_ValidateTuning()); EdgeTests(); DistanceTests(); StraightTests(); ArcTests(); TurnFailureTests(); TurnApproachTests(); CaptureHandoffTests(); ConfigTests();
+    assert(Motion_ValidateTuning()); EdgeTests(); DistanceTests(); StraightTests(); ReturnATurnTests(); ArcTests(); TurnFailureTests(); TurnApproachTests(); CaptureHandoffTests(); ConfigTests();
     assert(Motion_WrapDegrees(218.66f)<0.0f);
     puts("actual motion: edge windows, distinct frames, per-leg distance, turn/heading/line PD and faults passed");
     return 0;
