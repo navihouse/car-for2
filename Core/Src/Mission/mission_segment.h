@@ -18,7 +18,8 @@ enum { MOTION_FAULT_NONE, MOTION_FAULT_CONFIG, MOTION_FAULT_DISTANCE,
        MOTION_FAULT_TIMEOUT, MOTION_FAULT_TURN_TIMEOUT, MOTION_FAULT_TURN_DIRECTION,
        MOTION_FAULT_TURN_TRANSLATION, MOTION_FAULT_GYRO_RESPONSE,
        MOTION_FAULT_WHEEL_SYNC, MOTION_FAULT_HEADING, MOTION_FAULT_CAPTURE,
-       MOTION_FAULT_NO_LINE, MOTION_FAULT_AMBIGUOUS };
+       MOTION_FAULT_NO_LINE, MOTION_FAULT_AMBIGUOUS,
+       MOTION_FAULT_A_REFERENCE, MOTION_FAULT_A_RETURN_RANGE };
 
 /* One immutable foreground snapshot, shared by outgoing/incoming segments.
  * Wheel position is normalized encoder counts; speed is counts/second.
@@ -60,6 +61,8 @@ typedef struct {
     uint32_t active, phase, phase_started_ms;
     float course_origin_deg;
     uint32_t from_handoff;
+    uint32_t return_a, a_reference_valid;
+    float a_target_yaw_deg; /* Unwrapped course heading, A0 + 360*lap. */
     MissionMotionState motion;
 } MissionSegmentContext;
 

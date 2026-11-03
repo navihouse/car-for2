@@ -28,12 +28,19 @@ MissionSegmentOutput MotionStraight_Update(MissionSegmentContext *ctx, const Mis
         return Motion_Fail(ctx,MOTION_FAULT_TURN_TIMEOUT);
     if (ctx->phase==PHASE_STILL) {
         if (!Settled(s,in,MOTION_STILL_MS)) return Motion_Output(ctx,MOTION_BRAKE,0.0f,0.0f);
+        if (ctx->return_a && fabsf(s->target_yaw_deg-Motion_Yaw(ctx,in))>MOTION_A_RETURN_MAX_DEG)
+            return Motion_Fail(ctx,MOTION_FAULT_A_RETURN_RANGE);
         if (fabsf(s->heading_error_deg)>MOTION_TURN_BRAKE_DEG) {
             MotionTurn_Begin(ctx,in,PHASE_TURN); return MotionTurn_Update(ctx,in);
         }
         ctx->phase=PHASE_SETTLE; s->still_tracking=0U;
         return Motion_Output(ctx,MOTION_BRAKE,0.0f,0.0f);
     }
+    /* Keep the unwrapped guard active during correction and settling too:
+     * a gyro reset/extra full turn must not masquerade as a small error. */
+    if (ctx->return_a && ctx->phase!=PHASE_STRAIGHT &&
+        fabsf(s->target_yaw_deg-Motion_Yaw(ctx,in))>MOTION_A_RETURN_MAX_DEG)
+        return Motion_Fail(ctx,MOTION_FAULT_A_RETURN_RANGE);
     if (ctx->phase==PHASE_TURN) return MotionTurn_Update(ctx,in);
     if (ctx->phase==PHASE_SETTLE) {
         if (!Settled(s,in,MOTION_SETTLE_MS)) return Motion_Output(ctx,MOTION_BRAKE,0.0f,0.0f);

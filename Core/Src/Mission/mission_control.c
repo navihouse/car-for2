@@ -72,6 +72,9 @@ static MissionSegmentOutput Enter(MissionControl *m, const MissionInput *in)
     MissionSegmentContext *ctx = &m->contexts[m->segment];
     *ctx = (MissionSegmentContext){ .entry = *in, .active = 1U, .phase_started_ms = in->now_ms,
         .course_origin_deg=m->course_origin_deg, .from_handoff=m->arrivals!=0U };
+    ctx->return_a=m->mode==MISSION_MODE_FULL && m->segment==SEGMENT_AC && m->lap>0U;
+    ctx->a_reference_valid=m->a_reference_valid;
+    ctx->a_target_yaw_deg=m->a0_yaw_deg+360.0f*(float)m->lap;
     return s->Enter(ctx, in, s->params);
 }
 MissionOutput MissionControl_Start(MissionControl *m, const MissionInput *in)
@@ -80,6 +83,8 @@ MissionOutput MissionControl_Start(MissionControl *m, const MissionInput *in)
     m->reason = MISSION_OK; m->segment_fault = m->arrivals = 0U; m->last_point = POINT_NONE;
     m->started_ms = m->ended_ms = m->run_started = 0U;
     m->lap = 0U; m->drift_mdeg = 0;
+    m->a_reference_valid=m->a_departures=0U;
+    m->a0_yaw_deg=m->a_departure_yaw_deg=0.0f;
     m->laps = m->laps_override ? m->laps_override :
         (m->mode == MISSION_MODE_FULL ? MISSION_FULL_LAPS : 1U);
     uint32_t first = m->mode == MISSION_MODE_FULL ? 0U : m->mode - 1U;
@@ -125,7 +130,23 @@ MissionOutput MissionControl_Update(MissionControl *m, const MissionInput *in)
     const MissionSegment *s = m->segments[m->segment];
     MissionReason reason = CheckInput(s, in);
     if (reason != MISSION_OK) return MissionControl_Fail(m, in, reason, in->speed_fault);
-    MissionSegmentOutput result = s->Update(&m->contexts[m->segment], in, s->params);
+    MissionSegmentContext *ctx=&m->contexts[m->segment];
+    uint32_t before_phase=ctx->phase;
+    MissionSegmentOutput result = s->Update(ctx, in, s->params);
+    /* This transition occurs only AFTER the turn's continuous still window,
+     * including any correction cycles. Record actual yaw, not the command.
+     * The gyro stays live during every other phase of the whole route. */
+    if (m->mode==MISSION_MODE_FULL && m->segment==SEGMENT_AC &&
+        before_phase!=PHASE_STRAIGHT && ctx->phase==PHASE_STRAIGHT &&
+        result.status==SEG_RUNNING && result.mode==MOTION_FORWARD) {
+        float yaw=Motion_Yaw(ctx,in);
+        if (!m->a_reference_valid && m->lap==0U) {
+            m->a0_yaw_deg=yaw; m->a_reference_valid=1U;
+        }
+        if (m->a_reference_valid) {
+            m->a_departure_yaw_deg=yaw; m->a_departures=m->lap+1U;
+        }
+    }
     if (result.status != SEG_COMPLETE) return Accept(m, in, result, DRIVE_TARGET);
 
     MissionPoint arrived = endpoints[m->segment];

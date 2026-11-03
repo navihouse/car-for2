@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "mission_fake_port.h"
 #include "motion_drive.h"
@@ -18,6 +19,7 @@ int main(int argc, char **argv)
      * split between capture, following and the two stop-and-turn corners. */
     uint32_t phase_ms[10]={0U,0U,0U,0U,0U,0U,0U,0U,0U,0U};
     float left_fraction=0.0f,right_fraction=0.0f;
+    int32_t remembered_a0=0;
     while(mission_diag.state==MISSION_RUNNING && now<400000U) {
         now+=10U;
         if(mission_diag.lap==0U && mission_diag.phase<10U) phase_ms[mission_diag.phase]+=10U;
@@ -72,7 +74,17 @@ int main(int argc, char **argv)
             for(uint32_t i=0;i<8U;++i) fake_input.line_strength[i]=strength[i];
         }
         uint32_t motor_stops=fake_motor_stops, brakes=fake_motor_brakes, starts=fake_starts;
+        uint32_t departures=mission_a_heading.departures;
         Fake_Tick(now);
+        if(mission_a_heading.departures>departures) {
+            assert(mission_a_heading.valid && mission_a_heading.departures==departures+1U);
+            assert(mission_diag.segment==SEGMENT_AC && mission_diag.phase==PHASE_STRAIGHT);
+            assert(mission_a_heading.a1_mdeg==0);
+            if(!departures) remembered_a0=mission_a_heading.a0_mdeg;
+            assert(mission_a_heading.a0_mdeg==remembered_a0);
+            assert(abs(mission_a_heading.target_mdeg-remembered_a0-
+                (int32_t)(360000U*mission_a_heading.departures))<=2);
+        }
         if(mission_diag.arrivals>arrivals) {
             assert(mission_diag.arrivals==arrivals+1U && fake_points[arrivals]==expected[arrivals%4U]);
             if(arrivals%4U==0U || arrivals%4U==2U) {
@@ -96,9 +108,10 @@ int main(int argc, char **argv)
     assert(mission_diag.state==MISSION_DONE && arrivals==16U && mission_diag.lap==3U && turns_seen==3U);
     assert(!speed_control.running && MotionDrive_Mode()==MOTION_BRAKE);
     assert(!fake_resets && fake_imu_initializations==1U && fake_notifications==16U);
+    assert(mission_a_heading.valid && mission_a_heading.departures==4U);
     for(uint32_t i=0;i<100U;++i) { now+=10U; Fake_Tick(now); }
     assert(fake_notifications==16U && !speed_control.running && mission_diag.state==MISSION_DONE);
-    if(argc==2) {
+    if(argc>=2) {
         FILE *dump=fopen(argv[1],"w"); assert(dump);
         MissionDiagnostics record=mission_diag;
         uint32_t words[sizeof(record)/sizeof(uint32_t)]; memcpy(words,&record,sizeof(record));
@@ -106,6 +119,17 @@ int main(int argc, char **argv)
         for(uint32_t i=0;i<count;i+=4U) {
             fprintf(dump,"0x%08X :",0x20000000U+i*4U);
             for(uint32_t j=0U;j<4U&&i+j<count;++j) fprintf(dump," %08X",words[i+j]);
+            fputc('\n',dump);
+        }
+        assert(!fclose(dump));
+    }
+    if(argc==3) {
+        FILE *dump=fopen(argv[2],"w"); assert(dump);
+        MissionAHeadingDiagnostics record=mission_a_heading;
+        uint32_t words[sizeof(record)/sizeof(uint32_t)]; memcpy(words,&record,sizeof(record));
+        for(uint32_t i=0U;i<12U;i+=4U) {
+            fprintf(dump,"0x%08X :",0x20000000U+i*4U);
+            for(uint32_t j=0U;j<4U;++j) fprintf(dump," %08X",words[i+j]);
             fputc('\n',dump);
         }
         assert(!fclose(dump));

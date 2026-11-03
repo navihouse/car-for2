@@ -99,7 +99,7 @@ void MissionPort_Draw(const MissionDiagnostics *d)
     static const char *const points[] = {"-","A","B","C","D"};
     static const char *const faults[] = {"NONE","CONFIG","DISTANCE","TIMEOUT","TURN TIMEOUT",
         "TURN DIRECTION","TURN TRANSLATION","GYRO RESPONSE","WHEEL SYNC","HEADING",
-        "CAPTURE TIME/DIST","NO LINE","LINE AMBIGUOUS"};
+        "CAPTURE TIME/DIST","NO LINE","LINE AMBIGUOUS","A NO REFERENCE","A TURN RANGE"};
     static const char *const reasons[] = {
         "READY", "NOT IMPLEMENTED", "USER STOP", "BAD CONFIG", "BAD TARGET", "SEGMENT FAULT",
         "GYRO NOT READY", "LINE NOT READY", "ENCODER STALE", "SPEED FAULT", "CALIBRATING"

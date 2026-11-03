@@ -76,6 +76,25 @@ static void TestTimingAndWrap(void)
     for (uint32_t i=0;i<400U;i++) ImuHeading_Sample(&h,bias_raw,1U,i);
     assert(!h.ready); /* 400 samples alone cannot bypass stationary duration. */
 }
+static void TestSignedRotationAcrossMotionPhases(void)
+{
+    ImuHeading h; uint32_t now=Calibrate(&h,0U);
+    const float start=h.yaw_deg;
+    /* Turn, following correction, straight correction, braking coast.
+     * No estimator reset between phases; opposite signs must cancel. */
+    const int16_t rates_raw[]={5895,-1965,655,-655}; /* +90,-30,+10,-10 dps */
+    const uint32_t samples[]={200U,100U,40U,20U}; /* 1s,0.5s,0.2s,0.1s */
+    const float expected[]={90.0f,75.0f,77.0f,76.0f};
+    for(uint32_t phase=0U;phase<4U;++phase) {
+        for(uint32_t i=0U;i<samples[phase];++i) {
+            now+=IMU_POLL_MS;
+            assert(ImuHeading_Sample(&h,(int16_t)(bias_raw+rates_raw[phase]),0U,now)==HEADING_READY);
+        }
+        now+=IMU_POLL_MS;
+        assert(ImuHeading_Sample(&h,bias_raw,1U,now)==HEADING_READY);
+        assert(fabsf(h.yaw_deg-start-expected[phase])<0.01f);
+    }
+}
 static void TestManualGyroScale(void)
 {
     GyroCheck h;GyroCheck_Begin(&h,0U);
@@ -89,7 +108,7 @@ static void TestManualGyroScale(void)
 int main(void)
 {
     TestMeasuredBiasAndScale();TestStationaryAndReferenceGates();
-    TestVarianceGapAndRails();TestTimingAndWrap();TestManualGyroScale();
+    TestVarianceGapAndRails();TestTimingAndWrap();TestSignedRotationAcrossMotionPhases();TestManualGyroScale();
     puts("IMU: measured bias, +/-500 scale, stationary/noise gates, gap, rail and clock wrap passed");
     return 0;
 }

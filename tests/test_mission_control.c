@@ -46,6 +46,11 @@ static void Init(MissionControl *m, MissionSegment segments[4], const MissionSeg
     /* The fake route is single-lap; the FULL lap roll-over has its own case. */
     m->laps_override=1U;
 }
+static MissionSegmentOutput FakeAcUpdate(MissionSegmentContext *ctx, const MissionInput *in, const MissionSegmentParams *p)
+{
+    if(update_status==SEG_RUNNING) ctx->phase=PHASE_STRAIGHT;
+    return FakeUpdate(ctx,in,p);
+}
 static void ReturnASelectionTests(void)
 {
     MissionControl m; MissionSegment s[4]; const MissionSegment *table[4];
@@ -53,12 +58,19 @@ static void ReturnASelectionTests(void)
     Init(&m,s,table,MISSION_MODE_FULL); m.laps_override=4U;
     /* Real AC entry/validation, synthetic segment completions: exercise the
      * scheduler's handoff flag for every lap without inventing wheel feedback. */
-    s[0]=mission_segment_ac; s[0].Update=FakeUpdate;
+    s[0]=mission_segment_ac; s[0].Update=FakeAcUpdate;
     MissionOutput out=MissionControl_Start(&m,&in);
     assert(out.mode==MOTION_BRAKE && m.state==MISSION_RUNNING);
     assert(!m.contexts[0].from_handoff);
     assert(fabsf(m.contexts[0].motion.target_yaw_deg-MOTION_AC_TARGET_DEG)<0.001f);
     const float origin=m.course_origin_deg;
+    assert(!m.a_reference_valid);
+    /* Pretend the first turn has settled at -37, inside nominal tolerance. */
+    m.contexts[0].phase=PHASE_SETTLE;
+    in.yaw_deg=origin-37.0f/MOTION_YAW_SIGN; in.now_ms+=20U;
+    (void)MissionControl_Update(&m,&in);
+    assert(m.a_reference_valid && m.a_departures==1U);
+    assert(fabsf(m.a0_yaw_deg+37.0f)<0.001f);
     update_status=SEG_COMPLETE;
     for(uint32_t i=0U;i<16U;++i) {
         in.now_ms+=20U;
@@ -69,7 +81,15 @@ static void ReturnASelectionTests(void)
             assert(m.segment==SEGMENT_AC && m.contexts[0].from_handoff);
             assert(m.contexts[0].phase==PHASE_STILL && m.lap==i/4U+1U);
             assert(m.course_origin_deg==origin);
-            assert(fabsf(m.contexts[0].motion.target_yaw_deg-MOTION_AC_RETURN_TARGET_DEG)<0.001f);
+            float goal=-37.0f+360.0f*(float)m.lap;
+            assert(m.contexts[0].return_a && m.contexts[0].a_reference_valid);
+            assert(fabsf(m.contexts[0].motion.target_yaw_deg-goal)<0.001f);
+            /* Residual settle error must not re-anchor the immutable A0. */
+            update_status=SEG_RUNNING; in.now_ms+=20U;
+            in.yaw_deg=origin+(goal+1.0f)/MOTION_YAW_SIGN;
+            (void)MissionControl_Update(&m,&in); update_status=SEG_COMPLETE;
+            assert(m.a_departures==m.lap+1U && fabsf(m.a0_yaw_deg+37.0f)<0.001f);
+            assert(fabsf(m.a_departure_yaw_deg-goal-1.0f)<0.001f);
         }
     }
     assert(m.state==MISSION_DONE && out.action==DRIVE_STOP && m.arrivals==16U);
@@ -77,6 +97,7 @@ static void ReturnASelectionTests(void)
     out=MissionControl_Start(&m,&in);
     assert(m.state==MISSION_RUNNING && !m.lap && !m.contexts[0].from_handoff);
     assert(out.mode==MOTION_BRAKE);
+    assert(!m.a_reference_valid && !m.a_departures);
     assert(fabsf(m.contexts[0].motion.target_yaw_deg-MOTION_AC_TARGET_DEG)<0.001f);
 }
 int main(void)

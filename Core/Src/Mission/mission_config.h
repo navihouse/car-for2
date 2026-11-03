@@ -26,6 +26,9 @@
  * (0.04 dps), i.e. the smaller of the two errors. The per-lap residual is still
  * accumulated into mission_diag.drift_mdeg so the drift stays observable. */
 #define MISSION_LAP_ORIGIN_RESET 0
+#if MISSION_LAP_ORIGIN_RESET
+#error A_heading_memory_requires_the_original_course_origin
+#endif
 #define MISSION_MAX_TARGET_CPS ((float)MOTION_MAX_CPS)
 #define MISSION_GYRO_MAX_AGE_MS 30U
 #define MISSION_LINE_MAX_AGE_MS 150U

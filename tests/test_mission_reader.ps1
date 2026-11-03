@@ -5,7 +5,8 @@ param(
 $ErrorActionPreference='Stop'
 $taskReader=Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts\read_mission.ps1'
 $taskDump=Join-Path $OutputDir 'mission-v3-route-dump.txt'
-& $RouteTest $taskDump
+$taskMemoryDump=Join-Path $OutputDir 'a-heading-route-dump.txt'
+& $RouteTest $taskDump $taskMemoryDump
 if ($LASTEXITCODE -ne 0) { throw 'Actual route test failed before exporting its diagnostics.' }
 $taskRecord=& $taskReader -DumpFile $taskDump -AsJson | ConvertFrom-Json
 if ($taskRecord.Version -ne 3 -or $taskRecord.State -ne 'DONE' -or $taskRecord.Phase -ne 'COMPLETE' -or
@@ -35,4 +36,20 @@ catch {
     else { throw }
 }
 if (-not $taskRejected) { throw 'Decoder accepted a torn diagnostic snapshot.' }
+$taskMemoryReader=Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts\read_a_heading.ps1'
+$taskMemory=& $taskMemoryReader -DumpFile $taskMemoryDump -AsJson | ConvertFrom-Json
+if (-not $taskMemory.Valid -or $taskMemory.Departures -ne 4 -or $taskMemory.A0_deg -ge 0 -or
+    [math]::Abs($taskMemory.Next_target_deg-$taskMemory.A0_deg-1440) -gt 0.002 -or
+    [math]::Abs($taskMemory.A2_deg-1440+$taskMemory.Total_deg) -gt 0.002 -or
+    $taskMemory.Max_correction_deg -ne 90) { throw 'A-heading C ABI and PowerShell decoder disagree.' }
+$taskMemoryLines=Get-Content -LiteralPath $taskMemoryDump
+$taskMemoryLines[-1]=$taskMemoryLines[-1] -replace '[0-9A-F]{8}$','00000001'
+$taskMemoryTorn=Join-Path $OutputDir 'a-heading-torn-dump.txt'
+Set-Content -LiteralPath $taskMemoryTorn -Value $taskMemoryLines -Encoding ascii
+$taskRejected=$false
+try { & $taskMemoryReader -DumpFile $taskMemoryTorn -AsJson | Out-Null }
+catch {
+    if ($_.Exception.Message -like '*changed during read*') { $taskRejected=$true } else { throw }
+}
+if (-not $taskRejected) { throw 'A-heading decoder accepted a torn snapshot.' }
 Write-Output 'Mission V3: actual C ABI over four laps, signed units and torn-read rejection passed.'

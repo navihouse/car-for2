@@ -41,7 +41,8 @@ $points = @('NONE','A','B','C','D')
 $phases = @('IDLE','STILL','TURN','SETTLE','STRAIGHT','ALIGN','CAPTURE','FOLLOW','COMPLETE','FAULT')
 $motionModes = @('FORWARD','TURN','BRAKE')
 $motionFaults = @('NONE','CONFIG','DISTANCE','TIMEOUT','TURN_TIMEOUT','TURN_DIRECTION',
-    'TURN_TRANSLATION','GYRO_RESPONSE','WHEEL_SYNC','HEADING','CAPTURE','NO_LINE','AMBIGUOUS')
+    'TURN_TRANSLATION','GYRO_RESPONSE','WHEEL_SYNC','HEADING','CAPTURE','NO_LINE','AMBIGUOUS',
+    'A_REFERENCE','A_RETURN_RANGE')
 if ($words[3] -ge $modes.Count -or $words[4] -ge $states.Count -or $words[5] -ge $reasons.Count -or
     $words[6] -ge $segments.Count -or $words[11] -ge $points.Count -or
     $words[23] -ge $phases.Count -or $words[24] -ge $motionModes.Count) { throw 'Invalid mission enumeration.' }

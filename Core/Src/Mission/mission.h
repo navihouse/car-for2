@@ -35,4 +35,13 @@ typedef struct {
     uint32_t sequence_end;
 } MissionDiagnostics;
 extern volatile MissionDiagnostics mission_diag;
+/* Separate 48-byte record: keep the existing mission V3 ABI unchanged.
+ * Signed millidegrees, relative to the original course frame. A1 is since the
+ * last settled A departure; total remains relative to the immutable A0. */
+typedef struct {
+    uint32_t magic, version, sequence_begin, valid, departures;
+    int32_t a0_mdeg, a1_mdeg, total_mdeg, a2_mdeg, target_mdeg, max_mdeg;
+    uint32_t sequence_end;
+} MissionAHeadingDiagnostics;
+extern volatile MissionAHeadingDiagnostics mission_a_heading;
 #endif

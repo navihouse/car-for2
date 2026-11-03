@@ -1,9 +1,11 @@
 #include "mission.h"
 #include "mission_port.h"
+#include "motion_control.h"
 #include "button.h"
 #include <math.h>
 
 volatile MissionDiagnostics mission_diag;
+volatile MissionAHeadingDiagnostics mission_a_heading;
 static MissionControl control;
 static MissionInput snapshot;
 static Button_State button;
@@ -12,6 +14,7 @@ static int32_t left_target, right_target;
 static uint32_t last_publish_ms;
 static MissionMotionMode commanded_mode;
 _Static_assert(sizeof(MissionDiagnostics) == 152U, "Update the mission dump decoder");
+_Static_assert(sizeof(MissionAHeadingDiagnostics) == 48U, "Update the A-heading decoder");
 
 static int32_t DiagnosticNumber(float value)
 {
@@ -61,6 +64,21 @@ static void Publish(uint32_t now)
     mission_diag.sequence_begin = seq - 1U;
     mission_diag = d;
     mission_diag.sequence_begin = seq;
+    float yaw=Motion_Yaw(ctx,&snapshot);
+    float a_target=control.a0_yaw_deg+360.0f*(float)control.a_departures;
+    MissionAHeadingDiagnostics a={
+        .magic=0x41484431U, .version=1U, .sequence_begin=seq-1U,
+        .valid=control.a_reference_valid, .departures=control.a_departures,
+        .a0_mdeg=DiagnosticNumber(control.a0_yaw_deg*1000.0f),
+        .a1_mdeg=control.a_reference_valid ? DiagnosticNumber((yaw-control.a_departure_yaw_deg)*1000.0f) : 0,
+        .total_mdeg=control.a_reference_valid ? DiagnosticNumber((yaw-control.a0_yaw_deg)*1000.0f) : 0,
+        .a2_mdeg=control.a_reference_valid ? DiagnosticNumber((a_target-yaw)*1000.0f) : 0,
+        .target_mdeg=control.a_reference_valid ? DiagnosticNumber(a_target*1000.0f) : 0,
+        .max_mdeg=DiagnosticNumber(MOTION_A_RETURN_MAX_DEG*1000.0f), .sequence_end=seq
+    };
+    mission_a_heading.sequence_begin=seq-1U;
+    mission_a_heading=a;
+    mission_a_heading.sequence_begin=seq;
     last_publish_ms = now;
 }
 static void Apply(MissionOutput out, uint32_t now)
@@ -96,6 +114,7 @@ void Mission_Init(uint32_t now)
     MissionPort_Init(now);
     MissionControl_Init(&control, MISSION_BUILD_MODE, segments);
     mission_diag = (MissionDiagnostics){0};
+    mission_a_heading = (MissionAHeadingDiagnostics){0};
     tracking = consumed = event_count = last_event_ms = 0U;
     left_target = right_target = 0;
     commanded_mode=MOTION_BRAKE;

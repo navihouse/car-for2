@@ -26,6 +26,10 @@ typedef struct {
     MissionSegmentId segment;
     MissionPoint last_point;
     float course_origin_deg;
+    /* RAM-only heading memory. A0 is immutable for this run. Departure is
+     * only the display counter's zero; it never moves the A0 control target. */
+    uint32_t a_reference_valid, a_departures;
+    float a0_yaw_deg, a_departure_yaw_deg;
     const MissionSegment *segments[SEGMENT_COUNT];
     MissionSegmentContext contexts[SEGMENT_COUNT];
 } MissionControl;
