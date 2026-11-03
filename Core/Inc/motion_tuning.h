@@ -43,11 +43,11 @@
  * Angles are course headings, not an increment from a possibly wrong arrival.
  * Identification windows are inclusive. Nominal lengths do NOT end a segment. */
 #define MOTION_AC_TARGET_DEG (-38.66f)
-/* B点航向修正：2026-10-28 根据实车反馈先收回 5°；2026-11-03 用户反馈仍转得
- * 偏大，要求再减小约 1~2°，本次取 1.5°，累计偏移 -6.5°。
- * BD 目标为 212.16°，从朝左 180° 起标称左转 32.16°，并用同一目标保持直行。
+/* B点航向修正：2026-10-28 根据实车反馈先收回 5°；2026-11-03 先再减小
+ * 1.5°，用户试跑反馈仍转过头，按要求再减小 2°，累计偏移 -8.5°。
+ * BD 目标为 210.16°，从朝左 180° 起标称左转 30.16°，并用同一目标保持直行。
  * 本次增量仍需实车复核；可用 mission_diag 的 Heading_error_deg 辅助检查。 */
-#define MOTION_BD_CORNER_OFFSET_DEG (-6.5f)
+#define MOTION_BD_CORNER_OFFSET_DEG (-8.5f)
 #define MOTION_BD_TARGET_DEG (180.0f + 38.66f + MOTION_BD_CORNER_OFFSET_DEG)
 #define MOTION_AC_CRUISE_CPS 2000.0f
 #define MOTION_BD_CRUISE_CPS 2000.0f
