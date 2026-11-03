@@ -43,12 +43,11 @@
  * Angles are course headings, not an increment from a possibly wrong arrival.
  * Identification windows are inclusive. Nominal lengths do NOT end a segment. */
 #define MOTION_AC_TARGET_DEG (-38.66f)
-/* B点实测修正：CB 出弯后车在 B 停稳、原地左转到 BD 航向时，车头比黑线方向多偏了
- * 约 5°（目测，2026-10-28 第六次上板）。因此把 BD 的目标航向比标称 180+38.66 收回
- * 5°，即该处左转角从 38.66° 变为 33.66°。只影响 B 点这一次转向：
- * AC 的 -38.66°、CB/DA 的出弯切线、A 点转向都不动。若换赛道或换了转向参数，
- * 先用 mission_diag 的 Heading_error_deg 复核再调整这个偏移量。 */
-#define MOTION_BD_CORNER_OFFSET_DEG (-5.0f)
+/* B点航向修正：2026-10-28 根据实车反馈先收回 5°；2026-11-03 用户反馈仍转得
+ * 偏大，要求再减小约 1~2°，本次取 1.5°，累计偏移 -6.5°。
+ * BD 目标为 212.16°，从朝左 180° 起标称左转 32.16°，并用同一目标保持直行。
+ * 本次增量仍需实车复核；可用 mission_diag 的 Heading_error_deg 辅助检查。 */
+#define MOTION_BD_CORNER_OFFSET_DEG (-6.5f)
 #define MOTION_BD_TARGET_DEG (180.0f + 38.66f + MOTION_BD_CORNER_OFFSET_DEG)
 #define MOTION_AC_CRUISE_CPS 2000.0f
 #define MOTION_BD_CRUISE_CPS 2000.0f
