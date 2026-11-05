@@ -44,9 +44,9 @@
  * Identification windows are inclusive. Nominal lengths do NOT end a segment. */
 #define MOTION_AC_TARGET_DEG (-38.66f)
 /* After the first A turn has settled, FULL remembers its measured heading A0.
- * Starting with the second A visit, target A0 + 360*lap using continuous yaw.
- * Reject an excessive UNWRAPPED error after stopping; never hide a missed lap
- * or gyro reset with modulo 360. Trial safety limit, not a measured turn. */
+ * Opposite turns cancel over the route: every return targets the same A0.
+ * Reject excessive continuous-yaw error after stopping; do not hide an
+ * unexpected full turn with modulo 360. Trial safety limit. */
 #define MOTION_A_RETURN_MAX_DEG 90.0f
 /* B点航向修正：2026-10-28 根据实车反馈先收回 5°；2026-11-03 先再减小
  * 1.5° 后再减小 2°；随后用户反馈 D 点灰度未正对黑线，要求调大 30′=0.5°，

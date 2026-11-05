@@ -65,15 +65,14 @@ static void Publish(uint32_t now)
     mission_diag = d;
     mission_diag.sequence_begin = seq;
     float yaw=Motion_Yaw(ctx,&snapshot);
-    float a_target=control.a0_yaw_deg+360.0f*(float)control.a_departures;
     MissionAHeadingDiagnostics a={
-        .magic=0x41484431U, .version=1U, .sequence_begin=seq-1U,
+        .magic=0x41484431U, .version=2U, .sequence_begin=seq-1U,
         .valid=control.a_reference_valid, .departures=control.a_departures,
         .a0_mdeg=DiagnosticNumber(control.a0_yaw_deg*1000.0f),
         .a1_mdeg=control.a_reference_valid ? DiagnosticNumber((yaw-control.a_departure_yaw_deg)*1000.0f) : 0,
         .total_mdeg=control.a_reference_valid ? DiagnosticNumber((yaw-control.a0_yaw_deg)*1000.0f) : 0,
-        .a2_mdeg=control.a_reference_valid ? DiagnosticNumber((a_target-yaw)*1000.0f) : 0,
-        .target_mdeg=control.a_reference_valid ? DiagnosticNumber(a_target*1000.0f) : 0,
+        .a2_mdeg=control.a_reference_valid ? DiagnosticNumber((control.a0_yaw_deg-yaw)*1000.0f) : 0,
+        .target_mdeg=DiagnosticNumber(control.a0_yaw_deg*1000.0f),
         .max_mdeg=DiagnosticNumber(MOTION_A_RETURN_MAX_DEG*1000.0f), .sequence_end=seq
     };
     mission_a_heading.sequence_begin=seq-1U;

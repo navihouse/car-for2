@@ -25,7 +25,7 @@ foreach ($taskLine in $taskLines) {
     }
 }
 if ($taskWords.Count -ne 12) { throw "Incomplete A-heading record: $($taskWords.Count)/12 words." }
-if ($taskWords[0] -ne 0x41484431 -or $taskWords[1] -ne 1) { throw 'Wrong A-heading magic/version.' }
+if ($taskWords[0] -ne 0x41484431 -or $taskWords[1] -notin @(1,2)) { throw 'Wrong A-heading magic/version.' }
 if (($taskWords[2] -band 1) -or $taskWords[2] -ne $taskWords[11]) { throw 'A-heading snapshot changed during read; retry.' }
 if ($taskWords[3] -gt 1 -or ([bool]$taskWords[3] -ne ($taskWords[4] -gt 0))) { throw 'Invalid A-heading reference state.' }
 function Signed-Deg([uint32]$Word) { [BitConverter]::ToInt32([BitConverter]::GetBytes($Word),0)/1000.0 }

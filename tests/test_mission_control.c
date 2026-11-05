@@ -74,14 +74,14 @@ static void ReturnASelectionTests(void)
     update_status=SEG_COMPLETE;
     for(uint32_t i=0U;i<16U;++i) {
         in.now_ms+=20U;
-        if(i%4U==3U) in.yaw_deg=origin+(360.0f*(float)(i/4U+1U)+23.0f)/MOTION_YAW_SIGN;
+        if(i%4U==3U) in.yaw_deg=origin+23.0f/MOTION_YAW_SIGN;
         out=MissionControl_Update(&m,&in);
         if(i%4U==3U && i<15U) {
             assert(out.point==POINT_A && out.mode==MOTION_BRAKE);
             assert(m.segment==SEGMENT_AC && m.contexts[0].from_handoff);
             assert(m.contexts[0].phase==PHASE_STILL && m.lap==i/4U+1U);
             assert(m.course_origin_deg==origin);
-            float goal=-37.0f+360.0f*(float)m.lap;
+            const float goal=-37.0f;
             assert(m.contexts[0].return_a && m.contexts[0].a_reference_valid);
             assert(fabsf(m.contexts[0].motion.target_yaw_deg-goal)<0.001f);
             /* Residual settle error must not re-anchor the immutable A0. */

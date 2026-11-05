@@ -62,7 +62,7 @@ typedef struct {
     float course_origin_deg;
     uint32_t from_handoff;
     uint32_t return_a, a_reference_valid;
-    float a_target_yaw_deg; /* Unwrapped course heading, A0 + 360*lap. */
+    float a_target_yaw_deg; /* First settled A departure in the unwrapped course frame. */
     MissionMotionState motion;
 } MissionSegmentContext;
 

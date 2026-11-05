@@ -13,6 +13,7 @@ int main(int argc, char **argv)
 {
     fake_pressed=0U; Mission_Init(0U); fake_auto_feedback=0U;
     assert(Mission_Start(0U) && !speed_control.running);
+    const float gyro_origin=fake_input.yaw_deg;
     const MissionPoint expected[]={POINT_C,POINT_B,POINT_D,POINT_A};
     uint32_t now=0U, arrivals=0U, turns_seen=0U;
     /* Per-phase time of the first lap: the only way to see how the budget is
@@ -20,11 +21,24 @@ int main(int argc, char **argv)
     uint32_t phase_ms[10]={0U,0U,0U,0U,0U,0U,0U,0U,0U,0U};
     float left_fraction=0.0f,right_fraction=0.0f;
     int32_t remembered_a0=0;
+    const float track_mm=130.0f, rad_to_deg=57.2957795f;
     while(mission_diag.state==MISSION_RUNNING && now<400000U) {
         now+=10U;
         if(mission_diag.lap==0U && mission_diag.phase<10U) phase_ms[mission_diag.phase]+=10U;
         float left=speed_control.running ? speed_control.left_reference_cps : 0.0f;
         float right=speed_control.running ? speed_control.right_reference_cps : 0.0f;
+        if(mission_diag.segment==SEGMENT_DA && speed_control.running) {
+            /* Replay the opposite signed D-to-A arc from the course geometry.
+             * Keep forward speed from the controller; derive consistent gyro
+             * and encoder samples from this path. This tests the multi-lap
+             * handoff, not whether DA steering tracks a real arc. */
+            float speed=0.5f*(left/MOTION_LEFT_COUNTS_PER_MM+right/MOTION_RIGHT_COUNTS_PER_MM);
+            float advance=fminf(speed*0.01f,fmaxf(MOTION_DA_NOMINAL_MM-mission_diag.distance_mm,0.0f));
+            float rate=-(MOTION_BD_TARGET_DEG/MOTION_DA_NOMINAL_MM)*advance/0.01f;
+            float half_diff=0.5f*track_mm*rate/rad_to_deg;
+            left=(speed-half_diff)*MOTION_LEFT_COUNTS_PER_MM;
+            right=(speed+half_diff)*MOTION_RIGHT_COUNTS_PER_MM;
+        }
         left_fraction+=left*0.01f; right_fraction+=right*0.01f;
         int32_t ld=(int32_t)roundf(left_fraction), rd=(int32_t)roundf(right_fraction);
         left_fraction-=ld; right_fraction-=rd;
@@ -32,7 +46,7 @@ int main(int argc, char **argv)
         encoder_data.left_total+=ld; encoder_data.right_total+=rd;
         encoder_data.left_cps=(float)ld*100.0f; encoder_data.right_cps=(float)rd*100.0f;
         encoder_data.sample_ms=10U; ++encoder_data.sample_count;
-        float yaw_rate=((right/MOTION_RIGHT_COUNTS_PER_MM-left/MOTION_LEFT_COUNTS_PER_MM)/130.0f)*57.2957795f;
+        float yaw_rate=((right/MOTION_RIGHT_COUNTS_PER_MM-left/MOTION_LEFT_COUNTS_PER_MM)/track_mm)*rad_to_deg;
         fake_input.yaw_rate_dps=yaw_rate/MOTION_YAW_SIGN;
         fake_input.yaw_deg+=fake_input.yaw_rate_dps*0.01f;
         if(MotionDrive_Mode()==MOTION_TURN) {
@@ -56,9 +70,11 @@ int main(int argc, char **argv)
                      * the probe field of view the observation must be white,
                      * rather than an indefinitely clamped edge stripe. This is
                      * still a heading-only model, not a lateral tire model. */
-                    float entry=mission_diag.segment==SEGMENT_CB ? 0.0f : 180.0f;
-                    float tangent=entry+180.0f*((float)mission_diag.distance_mm/1257.0f);
-                    float lag=fake_input.yaw_deg-tangent;
+                    float fraction=(float)mission_diag.distance_mm/1257.0f;
+                    float tangent=mission_diag.segment==SEGMENT_CB ? 180.0f*fraction :
+                        MOTION_BD_TARGET_DEG*(1.0f-fraction);
+                    float lag=mission_diag.segment==SEGMENT_CB ? fake_input.yaw_deg-tangent :
+                        MOTION_YAW_SIGN*(fake_input.yaw_deg-gyro_origin)-tangent;
                     while(lag>180.0f) lag-=360.0f;
                     while(lag<-180.0f) lag+=360.0f;
                     float pos=lag*100.0f;
@@ -82,8 +98,9 @@ int main(int argc, char **argv)
             assert(mission_a_heading.a1_mdeg==0);
             if(!departures) remembered_a0=mission_a_heading.a0_mdeg;
             assert(mission_a_heading.a0_mdeg==remembered_a0);
-            assert(abs(mission_a_heading.target_mdeg-remembered_a0-
-                (int32_t)(360000U*mission_a_heading.departures))<=2);
+            assert(mission_a_heading.target_mdeg==remembered_a0);
+            assert(abs(mission_a_heading.total_mdeg)<=(int32_t)(MOTION_TURN_ACCEPT_DEG*1000.0f));
+            assert(mission_a_heading.a2_mdeg==-mission_a_heading.total_mdeg);
         }
         if(mission_diag.arrivals>arrivals) {
             assert(mission_diag.arrivals==arrivals+1U && fake_points[arrivals]==expected[arrivals%4U]);

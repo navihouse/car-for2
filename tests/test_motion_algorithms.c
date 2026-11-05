@@ -103,25 +103,26 @@ static void ReturnATurnTests(void)
     for(uint32_t returning=0U;returning<2U;++returning) {
         MissionInput in=Fresh();
         const float origin=37.0f;
-        in.yaw_deg=origin+(returning ? 383.0f : 0.0f)/MOTION_YAW_SIGN;
+        in.yaw_deg=origin+(returning ? 23.363f : 0.0f)/MOTION_YAW_SIGN;
         MissionSegmentContext ctx=Context(&in);
         ctx.course_origin_deg=origin; ctx.from_handoff=returning;
         ctx.return_a=returning; ctx.a_reference_valid=returning;
-        ctx.a_target_yaw_deg=323.0f; /* Remembered actual A0=-37, not nominal. */
+        ctx.a_target_yaw_deg=-41.144f; /* First settled heading from the board. */
         MissionSegmentOutput out=ac->Enter(&ctx,&in,ac->params);
-        const float goal=returning ? 323.0f : MOTION_AC_TARGET_DEG;
+        const float goal=returning ? -41.144f : MOTION_AC_TARGET_DEG;
         assert(out.mode==MOTION_BRAKE && ctx.phase==PHASE_STILL);
         assert(fabsf(ctx.motion.target_yaw_deg-goal)<0.001f);
-        /* Roll another 2 deg during braking. The turn uses the stopped yaw,
+        /* Change yaw during braking. The turn uses the stopped yaw,
          * rather than freezing an incremental angle at the probe crossing. */
-        if(returning) in.yaw_deg+=2.0f/MOTION_YAW_SIGN;
+        if(returning) in.yaw_deg-=1.513f/MOTION_YAW_SIGN;
         (void)ac->Update(&ctx,&in,ac->params);
         in.now_ms+=MOTION_STILL_MS; out=ac->Update(&ctx,&in,ac->params);
         assert(out.mode==MOTION_TURN && out.left_cps>0.0f && out.right_cps<0.0f);
-        const float stopped_yaw=returning ? 385.0f : 0.0f;
+        const float stopped_yaw=returning ? 21.850f : 0.0f;
         assert(fabsf(ctx.motion.turn_start_error-Motion_WrapDegrees(goal-stopped_yaw))<0.001f);
         if(returning) {
-            assert(fabsf(ctx.motion.turn_start_error+62.0f)<0.001f);
+            /* Reproduce the field fault's wrapped error on the zero-net branch. */
+            assert(fabsf(ctx.motion.turn_start_error+62.994f)<0.001f);
         }
         in.now_ms+=20U;
         in.yaw_deg=origin+goal/MOTION_YAW_SIGN;
@@ -140,13 +141,14 @@ static void ReturnATurnTests(void)
     ctx.return_a=1U;
     MissionSegmentOutput out=ac->Enter(&ctx,&in,ac->params);
     assert(out.status==SEG_FAULT && out.fault==MOTION_FAULT_A_REFERENCE);
-    /* A skipped full turn looks harmless modulo 360, but must brake and fail.
-     * The same applies to >90 degree corrections in either direction. */
-    const float arrival[]={0.0f,323.0f+MOTION_A_RETURN_MAX_DEG+1.0f,
-        323.0f-MOTION_A_RETURN_MAX_DEG-1.0f};
-    for(uint32_t i=0U;i<3U;++i) {
+    /* Unexpected full turns look harmless modulo 360; keep the raw guard
+     * for those and for >90 degree corrections in either direction. */
+    const float a0=-37.0f;
+    const float arrival[]={a0+360.0f,a0-360.0f,a0+MOTION_A_RETURN_MAX_DEG+1.0f,
+        a0-MOTION_A_RETURN_MAX_DEG-1.0f};
+    for(uint32_t i=0U;i<sizeof(arrival)/sizeof(arrival[0]);++i) {
         in=Fresh(); in.yaw_deg=arrival[i]/MOTION_YAW_SIGN; ctx=Context(&in);
-        ctx.return_a=ctx.a_reference_valid=1U; ctx.a_target_yaw_deg=323.0f;
+        ctx.return_a=ctx.a_reference_valid=1U; ctx.a_target_yaw_deg=a0;
         out=ac->Enter(&ctx,&in,ac->params); assert(out.mode==MOTION_BRAKE);
         in.yaw_rate_dps=10.0f; in.now_ms=10U;
         out=ac->Update(&ctx,&in,ac->params); assert(out.status==SEG_RUNNING && out.mode==MOTION_BRAKE);
@@ -155,12 +157,12 @@ static void ReturnATurnTests(void)
         in.now_ms+=MOTION_STILL_MS; out=ac->Update(&ctx,&in,ac->params);
         assert(out.status==SEG_FAULT && out.fault==MOTION_FAULT_A_RETURN_RANGE);
     }
-    /* Re-check during TURN: a reset after the initial guard is not safe. */
-    in=Fresh(); in.yaw_deg=350.0f/MOTION_YAW_SIGN; ctx=Context(&in);
-    ctx.return_a=ctx.a_reference_valid=1U; ctx.a_target_yaw_deg=323.0f;
+    /* Re-check during TURN: a full-turn discontinuity is still unsafe. */
+    in=Fresh(); in.yaw_deg=23.0f/MOTION_YAW_SIGN; ctx=Context(&in);
+    ctx.return_a=ctx.a_reference_valid=1U; ctx.a_target_yaw_deg=a0;
     (void)ac->Enter(&ctx,&in,ac->params); (void)ac->Update(&ctx,&in,ac->params);
     in.now_ms=MOTION_STILL_MS; out=ac->Update(&ctx,&in,ac->params); assert(out.mode==MOTION_TURN);
-    in.yaw_deg=0.0f; in.now_ms+=20U; out=ac->Update(&ctx,&in,ac->params);
+    in.yaw_deg+=360.0f/MOTION_YAW_SIGN; in.now_ms+=20U; out=ac->Update(&ctx,&in,ac->params);
     assert(out.status==SEG_FAULT && out.fault==MOTION_FAULT_A_RETURN_RANGE);
 }
 static void ArcTests(void)
