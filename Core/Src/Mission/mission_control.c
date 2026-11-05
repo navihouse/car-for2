@@ -74,7 +74,7 @@ static MissionSegmentOutput Enter(MissionControl *m, const MissionInput *in)
         .course_origin_deg=m->course_origin_deg, .from_handoff=m->arrivals!=0U };
     ctx->return_a=m->mode==MISSION_MODE_FULL && m->segment==SEGMENT_AC && m->lap>0U;
     ctx->a_reference_valid=m->a_reference_valid;
-    ctx->a_target_yaw_deg=m->a0_yaw_deg;
+    ctx->a_target_yaw_deg=MissionControl_ReturnATarget(m,m->lap);
     return s->Enter(ctx, in, s->params);
 }
 MissionOutput MissionControl_Start(MissionControl *m, const MissionInput *in)

@@ -43,8 +43,10 @@
  * Angles are course headings, not an increment from a possibly wrong arrival.
  * Identification windows are inclusive. Nominal lengths do NOT end a segment. */
 #define MOTION_AC_TARGET_DEG (-38.66f)
+/* Second lap only: +1 deg steers left to correct the observed right bias. */
+#define MOTION_AC_LAP2_OFFSET_DEG 1.0f
 /* After the first A turn has settled, FULL remembers its measured heading A0.
- * Opposite turns cancel over the route: every return targets the same A0.
+ * Opposite turns cancel over the route: A0 is the fixed base for returns.
  * Reject excessive continuous-yaw error after stopping; do not hide an
  * unexpected full turn with modulo 360. Trial safety limit. */
 #define MOTION_A_RETURN_MAX_DEG 90.0f

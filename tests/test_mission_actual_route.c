@@ -98,9 +98,16 @@ int main(int argc, char **argv)
             assert(mission_a_heading.a1_mdeg==0);
             if(!departures) remembered_a0=mission_a_heading.a0_mdeg;
             assert(mission_a_heading.a0_mdeg==remembered_a0);
-            assert(mission_a_heading.target_mdeg==remembered_a0);
-            assert(abs(mission_a_heading.total_mdeg)<=(int32_t)(MOTION_TURN_ACCEPT_DEG*1000.0f));
-            assert(mission_a_heading.a2_mdeg==-mission_a_heading.total_mdeg);
+            /* Only the second settled departure uses the left offset. The
+             * next-target diagnostic advertises it before that departure. */
+            int32_t next_offset=departures==0U ? 1000 : 0;
+            assert(abs(mission_a_heading.target_mdeg-remembered_a0-next_offset)<=1);
+            assert(abs(mission_a_heading.a2_mdeg+mission_a_heading.total_mdeg-next_offset)<=1);
+            if(departures) {
+                int32_t active_offset=departures==1U ? 1000 : 0;
+                assert(abs(mission_diag.target_yaw_mdeg-remembered_a0-active_offset)<=1);
+                assert(abs(mission_a_heading.total_mdeg-active_offset)<=(int32_t)(MOTION_TURN_ACCEPT_DEG*1000.0f));
+            }
         }
         if(mission_diag.arrivals>arrivals) {
             assert(mission_diag.arrivals==arrivals+1U && fake_points[arrivals]==expected[arrivals%4U]);

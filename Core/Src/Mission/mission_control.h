@@ -34,6 +34,12 @@ typedef struct {
     MissionSegmentContext contexts[SEGMENT_COUNT];
 } MissionControl;
 
+/* One completed lap means the car is about to start lap 2. */
+static inline float MissionControl_ReturnATarget(const MissionControl *m, uint32_t completed_laps)
+{
+    return m->a0_yaw_deg+(completed_laps==1U ? MOTION_AC_LAP2_OFFSET_DEG : 0.0f);
+}
+
 /* Pure control: caller owns sampling, actuation and notification. Test doubles
  * may supply descriptors here; firmware always supplies the four real ones. */
 void MissionControl_Init(MissionControl *, uint32_t mode, const MissionSegment *const segments[SEGMENT_COUNT]);

@@ -65,14 +65,17 @@ static void Publish(uint32_t now)
     mission_diag = d;
     mission_diag.sequence_begin = seq;
     float yaw=Motion_Yaw(ctx,&snapshot);
+    /* A departure is counted only after settling; until then this remains
+     * the pending return's target, including while that turn is in progress. */
+    float a_target=MissionControl_ReturnATarget(&control,control.a_departures);
     MissionAHeadingDiagnostics a={
-        .magic=0x41484431U, .version=2U, .sequence_begin=seq-1U,
+        .magic=0x41484431U, .version=3U, .sequence_begin=seq-1U,
         .valid=control.a_reference_valid, .departures=control.a_departures,
         .a0_mdeg=DiagnosticNumber(control.a0_yaw_deg*1000.0f),
         .a1_mdeg=control.a_reference_valid ? DiagnosticNumber((yaw-control.a_departure_yaw_deg)*1000.0f) : 0,
         .total_mdeg=control.a_reference_valid ? DiagnosticNumber((yaw-control.a0_yaw_deg)*1000.0f) : 0,
-        .a2_mdeg=control.a_reference_valid ? DiagnosticNumber((control.a0_yaw_deg-yaw)*1000.0f) : 0,
-        .target_mdeg=DiagnosticNumber(control.a0_yaw_deg*1000.0f),
+        .a2_mdeg=control.a_reference_valid ? DiagnosticNumber((a_target-yaw)*1000.0f) : 0,
+        .target_mdeg=control.a_reference_valid ? DiagnosticNumber(a_target*1000.0f) : 0,
         .max_mdeg=DiagnosticNumber(MOTION_A_RETURN_MAX_DEG*1000.0f), .sequence_end=seq
     };
     mission_a_heading.sequence_begin=seq-1U;

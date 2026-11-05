@@ -81,7 +81,7 @@ static void ReturnASelectionTests(void)
             assert(m.segment==SEGMENT_AC && m.contexts[0].from_handoff);
             assert(m.contexts[0].phase==PHASE_STILL && m.lap==i/4U+1U);
             assert(m.course_origin_deg==origin);
-            const float goal=-37.0f;
+            const float goal=i==3U ? -36.0f : -37.0f;
             assert(m.contexts[0].return_a && m.contexts[0].a_reference_valid);
             assert(fabsf(m.contexts[0].motion.target_yaw_deg-goal)<0.001f);
             /* Residual settle error must not re-anchor the immutable A0. */

@@ -38,7 +38,7 @@ catch {
 if (-not $taskRejected) { throw 'Decoder accepted a torn diagnostic snapshot.' }
 $taskMemoryReader=Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts\read_a_heading.ps1'
 $taskMemory=& $taskMemoryReader -DumpFile $taskMemoryDump -AsJson | ConvertFrom-Json
-if ($taskMemory.Version -ne 2 -or -not $taskMemory.Valid -or $taskMemory.Departures -ne 4 -or
+if ($taskMemory.Version -ne 3 -or -not $taskMemory.Valid -or $taskMemory.Departures -ne 4 -or
     $taskMemory.A0_deg -ge 0 -or $taskMemory.Next_target_deg -ne $taskMemory.A0_deg -or
     [math]::Abs($taskMemory.A2_deg+$taskMemory.Total_deg) -gt 0.002 -or
     $taskMemory.Max_correction_deg -ne 90) { throw 'A-heading C ABI and PowerShell decoder disagree.' }
