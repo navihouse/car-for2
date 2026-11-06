@@ -20,6 +20,7 @@ int main(int argc, char **argv)
      * split between capture, following and the two stop-and-turn corners. */
     uint32_t phase_ms[10]={0U,0U,0U,0U,0U,0U,0U,0U,0U,0U};
     float left_fraction=0.0f,right_fraction=0.0f;
+    float bd_da_mm=0.0f;
     int32_t remembered_a0=0;
     const float track_mm=130.0f, rad_to_deg=57.2957795f;
     while(mission_diag.state==MISSION_RUNNING && now<400000U) {
@@ -27,18 +28,10 @@ int main(int argc, char **argv)
         if(mission_diag.lap==0U && mission_diag.phase<10U) phase_ms[mission_diag.phase]+=10U;
         float left=speed_control.running ? speed_control.left_reference_cps : 0.0f;
         float right=speed_control.running ? speed_control.right_reference_cps : 0.0f;
-        if(mission_diag.segment==SEGMENT_DA && speed_control.running) {
-            /* Replay the opposite signed D-to-A arc from the course geometry.
-             * Keep forward speed from the controller; derive consistent gyro
-             * and encoder samples from this path. This tests the multi-lap
-             * handoff, not whether DA steering tracks a real arc. */
-            float speed=0.5f*(left/MOTION_LEFT_COUNTS_PER_MM+right/MOTION_RIGHT_COUNTS_PER_MM);
-            float advance=fminf(speed*0.01f,fmaxf(MOTION_DA_NOMINAL_MM-mission_diag.distance_mm,0.0f));
-            float rate=-(MOTION_BD_TARGET_DEG/MOTION_DA_NOMINAL_MM)*advance/0.01f;
-            float half_diff=0.5f*track_mm*rate/rad_to_deg;
-            left=(speed-half_diff)*MOTION_LEFT_COUNTS_PER_MM;
-            right=(speed+half_diff)*MOTION_RIGHT_COUNTS_PER_MM;
-        }
+        if ((mission_diag.segment==SEGMENT_BD && mission_diag.phase==PHASE_STRAIGHT) ||
+            mission_diag.segment==SEGMENT_DA)
+            bd_da_mm+=0.005f*(left/MOTION_LEFT_COUNTS_PER_MM+right/MOTION_RIGHT_COUNTS_PER_MM);
+        else bd_da_mm=0.0f;
         left_fraction+=left*0.01f; right_fraction+=right*0.01f;
         int32_t ld=(int32_t)roundf(left_fraction), rd=(int32_t)roundf(right_fraction);
         left_fraction-=ld; right_fraction-=rd;
@@ -55,9 +48,25 @@ int main(int argc, char **argv)
         }
         if(now%40U==0U) {
             uint32_t mask=0U, strength[8]={0U,0U,0U,0U,0U,0U,0U,0U};
-            if(mission_diag.segment==SEGMENT_AC || mission_diag.segment==SEGMENT_BD) {
+            if(mission_diag.segment==SEGMENT_AC) {
                 if(mission_diag.phase==PHASE_STRAIGHT && mission_diag.distance_mm>=1281) mask=0x18U;
-            } else if(mission_diag.distance_mm<1257) {
+            } else if ((mission_diag.segment==SEGMENT_BD && mission_diag.phase==PHASE_STRAIGHT) ||
+                       mission_diag.segment==SEGMENT_DA) {
+                /* No D marker: a continuous stripe follows a straight
+                 * tangent and then bends right. The commanded wheel speeds
+                 * drive yaw throughout; the stripe depends on heading lag. */
+                float progress=fmaxf(bd_da_mm-MOTION_BD_NOMINAL_MM,0.0f)/MOTION_DA_NOMINAL_MM;
+                float tangent=MOTION_BD_TARGET_DEG*(1.0f-progress);
+                float lag=MOTION_YAW_SIGN*(fake_input.yaw_deg-gyro_origin)-tangent;
+                float sensor_index=3.5f+0.1f*lag;
+                if (progress<1.0f && sensor_index>=0.0f && sensor_index<=7.0f) {
+                    uint32_t probe=(uint32_t)sensor_index;
+                    uint32_t fraction=(uint32_t)((sensor_index-(float)probe)*598.0f);
+                    mask=1U<<probe;
+                    strength[probe]=999U-fraction;
+                    if (fraction) { mask|=2U<<probe; strength[probe+1U]=401U+fraction; }
+                }
+            } else if(mission_diag.segment==SEGMENT_CB && mission_diag.distance_mm<1257) {
                 {
                     /* Arc feedback, not a fixed offset: the line of a semicircle
                      * sits where the tangent is, so what the bar sees is the
@@ -71,10 +80,8 @@ int main(int argc, char **argv)
                      * rather than an indefinitely clamped edge stripe. This is
                      * still a heading-only model, not a lateral tire model. */
                     float fraction=(float)mission_diag.distance_mm/1257.0f;
-                    float tangent=mission_diag.segment==SEGMENT_CB ? 180.0f*fraction :
-                        MOTION_BD_TARGET_DEG*(1.0f-fraction);
-                    float lag=mission_diag.segment==SEGMENT_CB ? fake_input.yaw_deg-tangent :
-                        MOTION_YAW_SIGN*(fake_input.yaw_deg-gyro_origin)-tangent;
+                    float tangent=180.0f*fraction;
+                    float lag=fake_input.yaw_deg-tangent;
                     while(lag>180.0f) lag-=360.0f;
                     while(lag<-180.0f) lag+=360.0f;
                     float pos=lag*100.0f;
@@ -112,13 +119,13 @@ int main(int argc, char **argv)
         if(mission_diag.arrivals>arrivals) {
             assert(mission_diag.arrivals==arrivals+1U && fake_points[arrivals]==expected[arrivals%4U]);
             if(arrivals%4U==0U || arrivals%4U==2U) {
-                /* C and D hand their arc an entry-tangent corner that the capture
-                 * steers away while rolling: the drive stays in FORWARD, so the
-                 * speed PI is never torn down and the car does not stop. */
+                /* C starts capture; D already has a visible stripe. Both
+                 * handoffs stay in FORWARD without restarting the speed PI. */
                 assert(MotionDrive_Mode()==MOTION_FORWARD && speed_control.running);
                 assert(fake_starts==starts && fake_motor_stops==motor_stops);
                 assert(fake_motor_brakes==brakes);
-                assert(mission_diag.phase==PHASE_CAPTURE && mission_diag.distance_mm==0);
+                assert(mission_diag.phase==(arrivals%4U==0U ? PHASE_CAPTURE : PHASE_FOLLOW));
+                assert(mission_diag.distance_mm==0);
             }
             if(arrivals%4U==1U) assert(MotionDrive_Mode()==MOTION_BRAKE && mission_diag.phase==PHASE_STILL);
             ++arrivals;

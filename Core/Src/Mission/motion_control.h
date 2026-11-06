@@ -20,6 +20,10 @@ MissionSegmentOutput Motion_Complete(MissionSegmentContext *);
 void Motion_Exit(MissionSegmentContext *, const MissionInput *, MissionExitReason);
 void MotionTurn_Begin(MissionSegmentContext *, const MissionInput *, uint32_t phase);
 MissionSegmentOutput MotionTurn_Update(MissionSegmentContext *, const MissionInput *);
+uint32_t MotionLine_Position(const MissionMotionState *, const MissionInput *,
+                             uint8_t allow_wide, uint8_t single_group, float *position);
+uint8_t MotionLine_UpdatePosition(MissionMotionState *, const MissionInput *,
+                                  float position, uint32_t period_ms, uint8_t reacquired);
 MissionSegmentOutput MotionStraight_Enter(MissionSegmentContext *, const MissionInput *, const MissionSegmentParams *);
 MissionSegmentOutput MotionStraight_Update(MissionSegmentContext *, const MissionInput *, const MissionSegmentParams *);
 MissionSegmentOutput MotionArc_Enter(MissionSegmentContext *, const MissionInput *, const MissionSegmentParams *);

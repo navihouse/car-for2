@@ -3,7 +3,8 @@
 
 /* Extracted from the old line_follow position/PD algorithm. Hardware, lap
  * counting and stop decisions belong to the mission, not this controller. */
-static uint32_t Position(MissionMotionState *s, const MissionInput *in, uint8_t capturing, float *position)
+uint32_t MotionLine_Position(const MissionMotionState *s, const MissionInput *in,
+                             uint8_t allow_wide, uint8_t single_group, float *position)
 {
     static const uint8_t order[8]=MOTION_LINE_ORDER;
     uint32_t groups=0U, previous=0U, total=0U, active=0U;
@@ -23,9 +24,9 @@ static uint32_t Position(MissionMotionState *s, const MissionInput *in, uint8_t 
     if (!total) return MOTION_FAULT_NO_LINE;
     /* A diagonal entry may illuminate most of the bar. Permit only a
      * SINGLE contiguous wide stripe during bounded capture, never at cruise. */
-    if (active>4U && (!capturing || groups!=1U)) return MOTION_FAULT_AMBIGUOUS;
+    if (active>4U && (!allow_wide || groups!=1U)) return MOTION_FAULT_AMBIGUOUS;
     if (groups==1U) { *position=(float)weighted[0]/(float)weights[0]; return MOTION_FAULT_NONE; }
-    if (!s->have_position || groups!=2U) return MOTION_FAULT_AMBIGUOUS;
+    if (single_group || !s->have_position || groups!=2U) return MOTION_FAULT_AMBIGUOUS;
     float p0=(float)weighted[0]/(float)weights[0], p1=(float)weighted[1]/(float)weights[1];
     float d0=fabsf(p0-s->last_position), d1=fabsf(p1-s->last_position);
     float nearest=fminf(d0,d1), other=fmaxf(d0,d1);
@@ -33,12 +34,34 @@ static uint32_t Position(MissionMotionState *s, const MissionInput *in, uint8_t 
     *position=d0<d1 ? p0 : p1;
     return MOTION_FAULT_NONE;
 }
+uint8_t MotionLine_UpdatePosition(MissionMotionState *s, const MissionInput *in,
+                                  float position, uint32_t period_ms, uint8_t reacquired)
+{
+    if (reacquired) {
+        s->last_position=position; s->derivative=0.0f;
+        s->control_ms=in->now_ms-period_ms;
+    }
+    if ((s->have_line_sequence && in->line_sequence==s->line_sequence) ||
+        (uint32_t)(in->now_ms-s->control_ms)<period_ms) return 0U;
+    if (s->have_position && !reacquired) {
+        float dt=(float)(uint32_t)(in->now_ms-s->control_ms)*0.001f;
+        float rate=(position-s->last_position)/dt;
+        s->derivative+=dt/(MOTION_LINE_D_FILTER_S+dt)*(rate-s->derivative);
+    }
+    s->line_position=position; s->last_position=position; s->have_position=1U;
+    s->line_sequence=in->line_sequence; s->have_line_sequence=1U; s->control_ms=in->now_ms;
+    return 1U;
+}
+static float EntryTangent(const MissionSegmentParams *p)
+{
+    return Motion_WrapDegrees(p->target_yaw_deg-180.0f*p->arc_yaw_sign);
+}
 static float CaptureHeadingError(const MissionSegmentContext *ctx, const MissionInput *in,
                                  const MissionSegmentParams *p)
 {
     /* These descriptors are semicircles: entry tangent is 180 deg before exit.
      * CB: 0 deg, DA: 180 deg. Standalone tests retain their existing pose. */
-    return Motion_WrapDegrees(p->target_yaw_deg-180.0f-Motion_Yaw(ctx,in));
+    return Motion_WrapDegrees(EntryTangent(p)-Motion_Yaw(ctx,in));
 }
 static uint8_t NarrowStripe(uint32_t mask)
 {
@@ -53,10 +76,10 @@ static float EntryRateError(const MissionInput *in, const MissionSegmentParams *
     float speed=fmaxf(0.5f*(in->left_cps/MOTION_LEFT_COUNTS_PER_MM+
         in->right_cps/MOTION_RIGHT_COUNTS_PER_MM),0.0f);
     float nominal=speed/(p->nominal_mm/3.14159265f)*57.29578f;
-    return MOTION_YAW_SIGN*in->yaw_rate_dps-nominal;
+    return MOTION_YAW_SIGN*in->yaw_rate_dps-p->arc_yaw_sign*nominal;
 }
-static void Targets(MissionMotionState *s, float cruise, float heading_trim, uint8_t following,
-                    float yaw_trim)
+static void Targets(MissionMotionState *s, const MissionSegmentParams *p, float cruise,
+                    float heading_trim, uint8_t following, float yaw_trim)
 {
     float floor=cruise<MOTION_LINE_HIGH_SPEED_THRESHOLD_CPS ? MOTION_LINE_CORNER_BASE_CPS : MOTION_LINE_HIGH_BASE_FLOOR_CPS;
     float base=Motion_Clamp(cruise-fabsf(s->line_position)*MOTION_LINE_POSITION_SLOWDOWN,fminf(floor,cruise),cruise);
@@ -66,7 +89,7 @@ static void Targets(MissionMotionState *s, float cruise, float heading_trim, uin
      * differential is baked in first and only the remainder is left as PD
      * authority, so the inner wheel can never drop below its floor and the
      * outer wheel can never cross MOTION_MAX_CPS. */
-    float turn_ff=following ? MOTION_LINE_CURVATURE_FF*cruise : 0.0f;
+    float turn_ff=following ? p->arc_yaw_sign*MOTION_LINE_CURVATURE_FF*cruise : 0.0f;
     float authority=fmaxf(cap-fabsf(turn_ff),0.0f);
     float turn=turn_ff+Motion_Clamp(MOTION_LINE_KP*s->line_position+MOTION_LINE_KD*s->derivative-heading_trim+yaw_trim,
         -authority,authority);
@@ -92,13 +115,13 @@ static float CaptureTrim(const MissionMotionState *s, const MissionSegmentParams
 {
     float radius=p->nominal_mm/3.14159265f;   /* 180 deg semicircle */
     if (!s->have_track || radius<1.0f) return 0.0f;
-    float dx=s->track_x, dy=s->track_y-radius;
-    float lateral=radius-sqrtf(dx*dx+dy*dy);  /* + = the line lies to the left */
-    float progress=atan2f(s->track_x,radius-s->track_y)*57.29578f;
+    float dx=s->track_x, dy=p->arc_yaw_sign*s->track_y-radius;
+    float lateral=radius-sqrtf(dx*dx+dy*dy);
+    float progress=atan2f(dx,-dy)*57.29578f;
     float steer=atan2f(lateral,MOTION_CAPTURE_LOOKAHEAD_MM)*57.29578f;
-    float error=Motion_WrapDegrees(s->track_origin_yaw_deg+progress-steer-yaw_deg);
+    float error=Motion_WrapDegrees(s->track_origin_yaw_deg+p->arc_yaw_sign*(progress-steer)-yaw_deg);
     float gain=fabsf(error)>MOTION_CAPTURE_ACQUIRE_DEG ? MOTION_CAPTURE_ACQUIRE_KP : MOTION_CAPTURE_HEADING_KP;
-    return -MOTION_LINE_CURVATURE_FF*base+gain*error;
+    return -p->arc_yaw_sign*MOTION_LINE_CURVATURE_FF*base+gain*error;
 }
 /* Advance the dead-reckoned pose by the distance covered since the last frame. */
 static void TrackAdvance(MissionMotionState *s, float yaw_deg)
@@ -120,17 +143,25 @@ MissionSegmentOutput MotionArc_Enter(MissionSegmentContext *ctx, const MissionIn
     MotionDistance_Begin(&ctx->motion.distance,in);
     MotionEdge_Reset(&ctx->motion.edge);
     if (ctx->from_handoff) MotionEdge_SeedBlack(&ctx->motion.edge,in);
+    float position;
+    if (ctx->line_handoff && !MotionLine_Position(&ctx->motion,in,0U,1U,&position)) {
+        /* BD already confirmed fresh narrow-line feedback and the bend.
+         * Keep steering on the same stripe at entry speed; do not search
+         * for a line that is already visible. */
+        ctx->phase=PHASE_FOLLOW;
+        return MotionArc_Update(ctx,in,p);
+    }
     /* A diagonal arrival is NOT tangent to the semicircle: at C the car still
      * holds the AC heading while CB expects its own entry tangent. Stopping to
      * rotate would brake from cruise and start the search from a standstill,
      * exactly where stiction and skidding cost the point. The capture phase
      * therefore owns the 38.66 deg corner and steers it away while rolling. */
     if (ctx->from_handoff) {
-        ctx->motion.target_yaw_deg=Motion_WrapDegrees(p->target_yaw_deg-180.0f);
+        ctx->motion.target_yaw_deg=EntryTangent(p);
         ctx->motion.heading_error_deg=Motion_WrapDegrees(ctx->motion.target_yaw_deg-Motion_Yaw(ctx,in));
         /* Entry frame for the rolling capture: +x along the semicircle tangent
          * at the point, +y to its left, origin at the car's position there. */
-        ctx->motion.track_origin_yaw_deg=Motion_WrapDegrees(p->target_yaw_deg-180.0f);
+        ctx->motion.track_origin_yaw_deg=EntryTangent(p);
         ctx->motion.track_x=0.0f; ctx->motion.track_y=0.0f; ctx->motion.track_mm=0.0f;
         ctx->motion.have_track=1U;
     }
@@ -152,7 +183,7 @@ MissionSegmentOutput MotionArc_Update(MissionSegmentContext *ctx, const MissionI
         fmaxf(p->capture_cps-MOTION_LINE_MIN_WHEEL_CPS,0.0f));
     float heading_trim=align_capture ? Motion_Clamp(MOTION_CAPTURE_HEADING_KP*entry_error,
         -heading_cap,heading_cap) : 0.0f;
-    s->target_yaw_deg=align_capture ? Motion_WrapDegrees(p->target_yaw_deg-180.0f) : p->target_yaw_deg;
+    s->target_yaw_deg=align_capture ? EntryTangent(p) : p->target_yaw_deg;
     s->heading_error_deg=Motion_WrapDegrees(s->target_yaw_deg-Motion_Yaw(ctx,in));
     if (s->distance_mm>p->point_max_mm || s->distance_mm < -MOTION_REVERSE_DISTANCE_FAULT_MM)
         return Motion_Fail(ctx,MOTION_FAULT_DISTANCE);
@@ -164,7 +195,7 @@ MissionSegmentOutput MotionArc_Update(MissionSegmentContext *ctx, const MissionI
      * is seeded only on a confirmed straight->arc handoff, not a single bit. */
     if (MotionEdge_Update(&s->edge,in,s->distance_mm,p->point_min_mm,p->point_max_mm,0U)) return Motion_Complete(ctx);
     float position=0.0f;
-    uint32_t fault=Position(s,in,ctx->phase==PHASE_CAPTURE,&position);
+    uint32_t fault=MotionLine_Position(s,in,ctx->phase==PHASE_CAPTURE,0U,&position);
     /* Seeing a usable narrow stripe and certifying FOLLOW are different jobs.
      * Steer from the stripe immediately, even while the entry-heading gate is
      * still waiting. Otherwise the tangent bias can fight a stripe moving to
@@ -242,7 +273,7 @@ MissionSegmentOutput MotionArc_Update(MissionSegmentContext *ctx, const MissionI
              * freeze the old wheel differential while the gyro reports spin.
              * Keep the original 100 ms dropout limit and positive wheel floors. */
             s->derivative=0.0f;
-            Targets(s,p->capture_cps,0.0f,1U,yaw_trim);
+            Targets(s,p,p->capture_cps,0.0f,1U,yaw_trim);
             return Motion_Output(ctx,MOTION_FORWARD,s->left_target,s->right_target);
         }
         /* Preserve positive forward motion while seeking the entry tangent.
@@ -251,25 +282,12 @@ MissionSegmentOutput MotionArc_Update(MissionSegmentContext *ctx, const MissionI
     }
     uint32_t line_period=(line_guided || settling) ? MOTION_CAPTURE_LINE_PERIOD_MS : MOTION_LINE_PERIOD_MS;
     uint8_t recovering=s->uncertain || first_stripe;
-    if (recovering) {
-        s->uncertain=0U; s->last_position=position; s->derivative=0.0f;
-        s->control_ms=in->now_ms-line_period;
-    }
-    if ((!s->have_line_sequence || in->line_sequence!=s->line_sequence) &&
-        (uint32_t)(in->now_ms-s->control_ms)>=line_period) {
-        float dt=(float)(uint32_t)(in->now_ms-s->control_ms)*0.001f;
-        if (s->have_position && !recovering) {
-            float rate=(position-s->last_position)/dt;
-            s->derivative+=dt/(MOTION_LINE_D_FILTER_S+dt)*(rate-s->derivative);
-        }
-        s->line_position=position; s->last_position=position; s->have_position=1U;
-        s->line_sequence=in->line_sequence; s->have_line_sequence=1U; s->control_ms=in->now_ms;
-        Targets(s,cruise,heading_trim,ctx->phase==PHASE_FOLLOW || line_guided,yaw_trim);
-    }
+    s->uncertain=0U;
+    uint8_t updated=MotionLine_UpdatePosition(s,in,position,line_period,recovering);
     /* Entry gyro damping keeps reacting between line frames without
      * differentiating old gray data or accelerating before settling. */
-    if (line_guided || settling ||
+    if (updated || line_guided || settling ||
         (ctx->phase==PHASE_FOLLOW && s->capture_frames==MOTION_CAPTURE_CONFIRM_FRAMES))
-        Targets(s,cruise,heading_trim,ctx->phase==PHASE_FOLLOW || line_guided,yaw_trim);
+        Targets(s,p,cruise,heading_trim,ctx->phase==PHASE_FOLLOW || line_guided,yaw_trim);
     return Motion_Output(ctx,MOTION_FORWARD,s->left_target,s->right_target);
 }

@@ -3,6 +3,7 @@
 /* BD: independently tunable; shared controller owns no hardware. */
 static const MissionSegmentParams params = {
     .kind=MOTION_KIND_STRAIGHT, .cruise_cps=MOTION_BD_CRUISE_CPS,
+    .follow_line=1U,
     .timeout_ms=MOTION_DRIVE_TIMEOUT_MS,
     .capture_cps=0.0f,
     .target_yaw_deg=MOTION_BD_TARGET_DEG,

@@ -44,6 +44,7 @@ typedef struct {
     MissionEdge edge;
     float distance_mm, target_yaw_deg, heading_error_deg;
     float line_position, last_position, derivative;
+    float line_yaw_deg;
     float left_target, right_target, recovery_left, recovery_right;
     /* Dead-reckoned position since the arc handoff, in the frame of the entry
      * tangent: +x forward, +y left. The capture uses it to steer onto the known
@@ -60,7 +61,7 @@ typedef struct {
     MissionInput entry;
     uint32_t active, phase, phase_started_ms;
     float course_origin_deg;
-    uint32_t from_handoff;
+    uint32_t from_handoff, line_handoff;
     uint32_t return_a, a_reference_valid;
     float a_target_yaw_deg; /* A0 with the departure lap's offset, in the original course frame. */
     MissionMotionState motion;
@@ -71,6 +72,8 @@ typedef struct {
     uint32_t timeout_ms;
     uint32_t kind;
     float capture_cps, target_yaw_deg, nominal_mm, point_min_mm, point_max_mm;
+    uint8_t follow_line;
+    int8_t arc_yaw_sign; /* +1 left, -1 right; zero for straight segments. */
 } MissionSegmentParams;
 typedef struct {
     MissionSegmentStatus status;

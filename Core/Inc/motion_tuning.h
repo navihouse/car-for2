@@ -144,10 +144,8 @@
  * disturbances only.
  * Derivation: diff_cps = v/R * track * counts_per_mm = cruise * 130 / 400, and
  * turn = diff_cps/2, i.e. 0.1625 per unit cruise.
- * Sign: both arcs are left hand (CB sweeps 0 -> 180, DA 180 -> 360, yaw
- * increases), and a left turn is the branch where left = base + turn must be
- * the slower wheel, so the fraction is negative. Flip it if the arena is ever
- * driven clockwise. */
+ * This value is for a left turn (left wheel slower). Each arc applies its
+ * own sign: CB turns left and DA turns right. */
 #define MOTION_LINE_CURVATURE_FF (-0.1625f)
 #define MOTION_LINE_D_FILTER_S 0.060f
 #define MOTION_LINE_PERIOD_MS 50U
@@ -209,6 +207,15 @@
 #define MOTION_CAPTURE_HEADING_ACCEPT_DEG 20.0f
 #define MOTION_CAPTURE_UNCERTAIN_MS 350U
 #define MOTION_LINE_UNCERTAIN_MS 100U
+/* BD has a continuous narrow stripe, with no separate marker at D. Follow
+ * the stripe into the bend; only fresh, sustained rightward motion near
+ * the end of BD is accepted as the handoff. */
+#define MOTION_BD_D_TURN_MIN_DEG 12.0f
+#define MOTION_BD_D_RATE_MIN_DPS 8.0f
+#define MOTION_BD_LINE_PERIOD_MS 10U
+#define MOTION_BD_LINE_YAW_KD 2.0f
+#define MOTION_BD_LINE_LOSS_MS 250U
+#define MOTION_BD_LINE_LOSS_CPS 750.0f
 /* Straight segments hand the arc its own entry speed. A rolling 38.66 deg
  * corner is steered by wheel differential, and decelerating from cruise eats
  * exactly that differential (the PI saturates, both wheels coast) while the

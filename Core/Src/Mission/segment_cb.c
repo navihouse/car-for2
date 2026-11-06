@@ -3,6 +3,7 @@
 /* CB: independently tunable; shared controller owns no hardware. */
 static const MissionSegmentParams params = {
     .kind=MOTION_KIND_ARC, .cruise_cps=MOTION_CB_CRUISE_CPS,
+    .arc_yaw_sign=1,
     .timeout_ms=MOTION_ARC_TIMEOUT_MS,
     .capture_cps=MOTION_CB_CAPTURE_CPS,
     .target_yaw_deg=180.0f,

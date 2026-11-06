@@ -18,12 +18,12 @@ static int failures;
 
 static const MissionSegmentParams CB = {
     .cruise_cps = MOTION_CB_CRUISE_CPS, .timeout_ms = MOTION_ARC_TIMEOUT_MS, .kind = MOTION_KIND_ARC,
-    .capture_cps = MOTION_CB_CAPTURE_CPS, .target_yaw_deg = 180.0f,
+    .capture_cps = MOTION_CB_CAPTURE_CPS, .target_yaw_deg = 180.0f, .arc_yaw_sign = 1,
     .nominal_mm = MOTION_CB_NOMINAL_MM,
     .point_min_mm = MOTION_CB_POINT_MIN_MM, .point_max_mm = MOTION_CB_POINT_MAX_MM};
 static const MissionSegmentParams DA = {
     .cruise_cps = MOTION_DA_CRUISE_CPS, .timeout_ms = MOTION_ARC_TIMEOUT_MS, .kind = MOTION_KIND_ARC,
-    .capture_cps = MOTION_DA_CAPTURE_CPS, .target_yaw_deg = 0.0f,
+    .capture_cps = MOTION_DA_CAPTURE_CPS, .target_yaw_deg = 0.0f, .arc_yaw_sign = -1,
     .nominal_mm = MOTION_DA_NOMINAL_MM,
     .point_min_mm = MOTION_DA_POINT_MIN_MM, .point_max_mm = MOTION_DA_POINT_MAX_MM};
 
@@ -196,6 +196,29 @@ static void ShowStripeAt(Rig *rig, uint32_t index)
     rig->in.line_mask = 1U << index;
     for (uint32_t i = 0; i < 8U; ++i) rig->in.line_strength[i] = (i == index) ? 1000U : 0U;
     rig->in.line_sequence += 1U;
+}
+
+static void TestDaKeepsTheStripeFromBD(void)
+{
+    Rig rig;
+    RigInit(&rig,195.0f);
+    rig.ctx.line_handoff=1U;
+    ShowNarrowStripe(&rig);
+    MissionSegmentOutput out=MotionArc_Enter(&rig.ctx,&rig.in,&DA);
+    CHECK(rig.ctx.phase==PHASE_FOLLOW);
+    CHECK(out.mode==MOTION_FORWARD && out.left_cps>out.right_cps);
+    const float centered_diff=out.left_cps-out.right_cps;
+    rig.in.now_ms=MOTION_CAPTURE_LINE_PERIOD_MS;
+    ShowStripeAt(&rig,7U); /* fault replay: the last stripe was on the far right */
+    out=MotionArc_Update(&rig.ctx,&rig.in,&DA);
+    CHECK(out.left_cps-out.right_cps>centered_diff);
+    CHECK(out.right_cps>=MOTION_LINE_HIGH_WHEEL_FLOOR_CPS);
+    rig.in.line_mask=0U; ++rig.in.line_sequence;
+    out=MotionArc_Update(&rig.ctx,&rig.in,&DA);
+    CHECK(out.status==SEG_RUNNING && out.left_cps>out.right_cps);
+    rig.in.now_ms+=MOTION_LINE_UNCERTAIN_MS;
+    out=MotionArc_Update(&rig.ctx,&rig.in,&DA);
+    CHECK(out.status==SEG_FAULT && out.fault==MOTION_FAULT_NO_LINE && out.mode==MOTION_BRAKE);
 }
 
 /* The real C handoff: after the point bar the sensor sees white for a while and
@@ -433,6 +456,7 @@ int main(void)
     TestBlindZoneThenEdgeStripeConfirms();
     TestAlignedEntryKeepsCurvatureBias();
     TestDaRollsTheOtherWay();
+    TestDaKeepsTheStripeFromBD();
     TestStripeWinsBeforeHeadingConfirmation();
     TestFreshCaptureFramesReactBeforeFollow();
     TestFollowRetainsEntrySpeed();

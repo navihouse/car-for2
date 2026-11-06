@@ -96,6 +96,71 @@ static void StraightTests(void)
     (void)MotionStraight_Enter(&ctx,&in,p);
     assert(fabsf(ctx.motion.heading_error_deg-Motion_WrapDegrees(p->target_yaw_deg-170.0f))<0.01f);
 }
+static void StartGuidedBD(MissionSegmentContext *ctx, MissionInput *in, const MissionSegmentParams *p)
+{
+    *in=Fresh(); in->yaw_deg=p->target_yaw_deg/MOTION_YAW_SIGN;
+    Frame(in,0x18U); *ctx=Context(in);
+    (void)MotionStraight_Enter(ctx,in,p);
+    (void)MotionStraight_Update(ctx,in,p);
+    in->now_ms+=MOTION_STILL_MS;
+    (void)MotionStraight_Update(ctx,in,p);
+    (void)MotionStraight_Update(ctx,in,p);
+    in->now_ms+=MOTION_SETTLE_MS;
+    assert(MotionStraight_Update(ctx,in,p).mode==MOTION_FORWARD && ctx->phase==PHASE_STRAIGHT);
+}
+static void BDFollowsTheStripe(void)
+{
+    const MissionSegmentParams *p=mission_segment_bd.params;
+    MissionInput in;
+    MissionSegmentContext ctx;
+    StartGuidedBD(&ctx,&in,p);
+    Frame(&in,0x80U);
+    MissionSegmentOutput out=MotionStraight_Update(&ctx,&in,p);
+    assert(out.left_cps>out.right_cps && out.right_cps>=MOTION_LINE_MIN_WHEEL_CPS);
+    Frame(&in,0x01U);
+    out=MotionStraight_Update(&ctx,&in,p);
+    assert(out.left_cps<out.right_cps && out.left_cps>=MOTION_LINE_MIN_WHEEL_CPS);
+    /* A brief crossing, followed by the same stripe, is not D or a PD kick. */
+    Frame(&in,0xFFU);
+    out=MotionStraight_Update(&ctx,&in,p);
+    assert(out.status==SEG_RUNNING && out.left_cps<p->cruise_cps);
+    Frame(&in,0x18U);
+    out=MotionStraight_Update(&ctx,&in,p);
+    assert(out.left_cps==out.right_cps && ctx.motion.derivative==0.0f);
+    Frame(&in,0U); out=MotionStraight_Update(&ctx,&in,p);
+    assert(out.status==SEG_RUNNING);
+    in.now_ms+=MOTION_BD_LINE_LOSS_MS;
+    out=MotionStraight_Update(&ctx,&in,p);
+    assert(out.status==SEG_FAULT && out.fault==MOTION_FAULT_NO_LINE && out.mode==MOTION_BRAKE);
+
+    StartGuidedBD(&ctx,&in,p);
+    in.left_counts=in.right_counts=(int64_t)(950.0f*MOTION_LEFT_COUNTS_PER_MM);
+    in.yaw_deg=(p->target_yaw_deg-13.0f)/MOTION_YAW_SIGN; in.yaw_rate_dps=-20.0f/MOTION_YAW_SIGN;
+    for (uint32_t i=0U;i<4U;++i) {
+        Frame(&in,0x18U);
+        assert(MotionStraight_Update(&ctx,&in,p).status==SEG_RUNNING);
+    }
+    assert(!ctx.motion.edge.candidate_frames);
+    in.left_counts=in.right_counts=(int64_t)(p->nominal_mm*MOTION_LEFT_COUNTS_PER_MM);
+    Frame(&in,0xFFU); /* Even here, a wide or split frame cannot confirm D. */
+    assert(MotionStraight_Update(&ctx,&in,p).status==SEG_RUNNING && !ctx.motion.edge.candidate_frames);
+    Frame(&in,0x18U);
+    for (uint32_t i=0U;i<10U;++i) assert(MotionStraight_Update(&ctx,&in,p).status==SEG_RUNNING);
+    assert(ctx.motion.edge.candidate_frames==1U);
+    in.yaw_rate_dps=0.0f;
+    assert(MotionStraight_Update(&ctx,&in,p).status==SEG_RUNNING && !ctx.motion.edge.candidate_frames);
+    in.yaw_rate_dps=-20.0f/MOTION_YAW_SIGN;
+    in.yaw_deg=(p->target_yaw_deg-18.0f)/MOTION_YAW_SIGN;
+    for (uint32_t i=1U;i<=MOTION_POINT_CONFIRM_FRAMES;++i) {
+        Frame(&in,0x18U); out=MotionStraight_Update(&ctx,&in,p);
+        assert(out.status==(i==MOTION_POINT_CONFIRM_FRAMES ? SEG_COMPLETE : SEG_RUNNING));
+    }
+
+    StartGuidedBD(&ctx,&in,p);
+    in.left_counts=in.right_counts=(int64_t)((p->point_max_mm+1.0f)*MOTION_LEFT_COUNTS_PER_MM);
+    Frame(&in,0x18U); out=MotionStraight_Update(&ctx,&in,p);
+    assert(out.status==SEG_FAULT && out.fault==MOTION_FAULT_DISTANCE);
+}
 static void ReturnATurnTests(void)
 {
     const MissionSegment *ac=&mission_segment_ac;
@@ -359,6 +424,7 @@ static void ConfigTests(void)
 }
 int main(void)
 {
+    BDFollowsTheStripe();
     assert(Motion_ValidateTuning()); EdgeTests(); DistanceTests(); StraightTests(); ReturnATurnTests(); ArcTests(); TurnFailureTests(); TurnApproachTests(); CaptureHandoffTests(); ConfigTests();
     assert(Motion_WrapDegrees(218.66f)<0.0f);
     puts("actual motion: edge windows, distinct frames, per-leg distance, turn/heading/line PD and faults passed");

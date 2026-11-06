@@ -72,6 +72,8 @@ static MissionSegmentOutput Enter(MissionControl *m, const MissionInput *in)
     MissionSegmentContext *ctx = &m->contexts[m->segment];
     *ctx = (MissionSegmentContext){ .entry = *in, .active = 1U, .phase_started_ms = in->now_ms,
         .course_origin_deg=m->course_origin_deg, .from_handoff=m->arrivals!=0U };
+    ctx->line_handoff=ctx->from_handoff && m->segment==SEGMENT_DA &&
+        m->segments[SEGMENT_BD]->params->follow_line;
     ctx->return_a=m->mode==MISSION_MODE_FULL && m->segment==SEGMENT_AC && m->lap>0U;
     ctx->a_reference_valid=m->a_reference_valid;
     ctx->a_target_yaw_deg=MissionControl_ReturnATarget(m,m->lap);

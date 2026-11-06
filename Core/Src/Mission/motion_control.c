@@ -31,11 +31,12 @@ uint8_t Motion_ValidateTuning(void)
         MOTION_CAPTURE_HEADING_MAX_CPS,MOTION_CAPTURE_HEADING_ACCEPT_DEG,
         MOTION_CAPTURE_UNCERTAIN_MS,MOTION_CAPTURE_LINE_PERIOD_MS,
         MOTION_ENTRY_SETTLE_MS,MOTION_ENTRY_CENTER_LIMIT,MOTION_ENTRY_RATE_MARGIN_DPS,
-        MOTION_A_RETURN_MAX_DEG};
+        MOTION_A_RETURN_MAX_DEG,MOTION_BD_D_TURN_MIN_DEG,MOTION_BD_D_RATE_MIN_DPS,
+        MOTION_BD_LINE_PERIOD_MS,MOTION_BD_LINE_LOSS_MS};
     const float gains[] = {MOTION_SPEED_KP,MOTION_SPEED_KI,MOTION_HEADING_KP,MOTION_HEADING_KD,
         MOTION_TURN_ANGLE_KP,MOTION_TURN_RATE_FF,MOTION_TURN_RATE_KP,MOTION_LINE_KP,MOTION_LINE_KD,
         MOTION_LINE_POSITION_SLOWDOWN,MOTION_TURN_BRAKE_LEAD_S,MOTION_CAPTURE_HEADING_KP,
-        MOTION_ENTRY_YAW_KD};
+        MOTION_ENTRY_YAW_KD,MOTION_BD_LINE_YAW_KD};
     for (uint32_t i=0;i<sizeof(positive)/sizeof(positive[0]);++i)
         if (!isfinite(positive[i]) || positive[i]<=0.0f) return 0U;
     for (uint32_t i=0;i<sizeof(gains)/sizeof(gains[0]);++i)
@@ -45,6 +46,8 @@ uint8_t Motion_ValidateTuning(void)
         MOTION_HEADING_TRIM_MAX_CPS>=(float)MOTION_MAX_CPS*0.5f ||
         MOTION_TURN_ACCEPT_DEG<MOTION_TURN_BRAKE_DEG ||
         MOTION_A_RETURN_MAX_DEG>=180.0f || MOTION_A_RETURN_MAX_DEG<=MOTION_TURN_ACCEPT_DEG ||
+        MOTION_BD_D_TURN_MIN_DEG>=90.0f ||
+        !(MOTION_BD_LINE_LOSS_CPS>=MOTION_LINE_MIN_WHEEL_CPS && MOTION_BD_LINE_LOSS_CPS<=MOTION_MAX_CPS) ||
         MOTION_TURN_APPROACH_MIN_CPS>MOTION_TURN_MIN_CPS ||
         MOTION_TURN_APPROACH_DEG<=MOTION_TURN_BRAKE_DEG ||
         MOTION_CAPTURE_UNCERTAIN_MS>MOTION_CAPTURE_TIMEOUT_MS ||
@@ -72,9 +75,12 @@ uint8_t Motion_ValidateParams(const MissionSegmentParams *p)
         !(p->point_min_mm>=0.0f && p->point_max_mm>p->point_min_mm) ||
         !(p->nominal_mm>0.0f && isfinite(p->nominal_mm)) || !isfinite(p->target_yaw_deg)) return 0U;
     if (p->kind==MOTION_KIND_STRAIGHT)
-        return p->cruise_cps>MOTION_HEADING_TRIM_MAX_CPS;
+        return p->arc_yaw_sign==0 && p->follow_line<=1U &&
+            p->cruise_cps>MOTION_HEADING_TRIM_MAX_CPS &&
+            (!p->follow_line || p->cruise_cps>MOTION_LINE_MIN_WHEEL_CPS);
     if (p->kind==MOTION_KIND_ARC)
-        return p->capture_cps>=MOTION_LINE_MIN_WHEEL_CPS && p->capture_cps<=p->cruise_cps &&
+        return !p->follow_line && (p->arc_yaw_sign==1 || p->arc_yaw_sign==-1) &&
+            p->capture_cps>=MOTION_LINE_MIN_WHEEL_CPS && p->capture_cps<=p->cruise_cps &&
             p->cruise_cps>=MOTION_LINE_MIN_WHEEL_CPS;
     return 0U;
 }

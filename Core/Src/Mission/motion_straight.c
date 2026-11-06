@@ -12,6 +12,58 @@ static uint8_t Settled(MissionMotionState *s, const MissionInput *in, uint32_t w
     if (!s->still_tracking) { s->still_tracking=1U; s->still_since_ms=in->now_ms; }
     return (uint32_t)(in->now_ms-s->still_since_ms)>=window_ms;
 }
+/* D has no transverse marker. A right bend on a still-visible narrow line
+ * must persist on distinct gray frames inside the distance window. */
+static uint8_t BendAtD(MissionMotionState *s, const MissionInput *in,
+                       const MissionSegmentParams *p, uint8_t line_visible)
+{
+    MissionEdge *e=&s->edge;
+    uint8_t fresh=in->line_sequence && (!e->have_sequence || in->line_sequence!=e->last_sequence);
+    if (fresh) { e->have_sequence=1U; e->last_sequence=in->line_sequence; }
+    if (!line_visible || s->distance_mm<p->point_min_mm || s->distance_mm>p->point_max_mm ||
+        s->heading_error_deg<MOTION_BD_D_TURN_MIN_DEG ||
+        MOTION_YAW_SIGN*in->yaw_rate_dps>-MOTION_BD_D_RATE_MIN_DPS) {
+        e->candidate_frames=0U;
+        return 0U;
+    }
+    if (fresh && e->candidate_frames<MOTION_POINT_CONFIRM_FRAMES) ++e->candidate_frames;
+    return e->candidate_frames>=MOTION_POINT_CONFIRM_FRAMES;
+}
+static MissionSegmentOutput FollowBD(MissionSegmentContext *ctx, const MissionInput *in,
+                                     const MissionSegmentParams *p)
+{
+    MissionMotionState *s=&ctx->motion;
+    float position=0.0f;
+    uint32_t fault=MotionLine_Position(s,in,0U,1U,&position);
+    if (BendAtD(s,in,p,fault==MOTION_FAULT_NONE)) return Motion_Complete(ctx);
+    /* Before the D window, a large turn suggests the wrong branch. Near
+     * D, allow the expected right turn; a large left turn is still a fault. */
+    if (s->heading_error_deg < -MOTION_HEADING_FAULT_DEG ||
+        (s->distance_mm<p->point_min_mm && s->heading_error_deg>MOTION_HEADING_FAULT_DEG))
+        return Motion_Fail(ctx,MOTION_FAULT_HEADING);
+
+    float base=p->cruise_cps, steer;
+    float yaw=Motion_Yaw(ctx,in), rate=MOTION_YAW_SIGN*in->yaw_rate_dps;
+    if (fault) {
+        /* At a crossing or short dropout, hold the last valid heading for
+         * a bounded time at reduced speed. No line means no D confirmation. */
+        if (!s->uncertain) { s->uncertain=1U; s->uncertain_ms=in->now_ms; }
+        if ((uint32_t)(in->now_ms-s->uncertain_ms)>=MOTION_BD_LINE_LOSS_MS)
+            return Motion_Fail(ctx,fault);
+        base=fminf(base,MOTION_BD_LINE_LOSS_CPS);
+        steer=Motion_Clamp(MOTION_HEADING_KP*Motion_WrapDegrees(yaw-s->line_yaw_deg)+
+            MOTION_HEADING_KD*rate,-MOTION_HEADING_TRIM_MAX_CPS,MOTION_HEADING_TRIM_MAX_CPS);
+    } else {
+        if (MotionLine_UpdatePosition(s,in,position,MOTION_BD_LINE_PERIOD_MS,s->uncertain))
+            s->line_yaw_deg=yaw;
+        s->uncertain=0U;
+        steer=MOTION_LINE_KP*s->line_position+MOTION_LINE_KD*s->derivative+MOTION_BD_LINE_YAW_KD*rate;
+    }
+    float cap=fmaxf(0.0f,fminf(MOTION_LINE_STEERING_MAX_CPS,
+        fminf(base-MOTION_LINE_MIN_WHEEL_CPS,(float)MOTION_MAX_CPS-base)));
+    steer=Motion_Clamp(steer,-cap,cap);
+    return Motion_Output(ctx,MOTION_FORWARD,base+steer,base-steer);
+}
 MissionSegmentOutput MotionStraight_Enter(MissionSegmentContext *ctx, const MissionInput *in, const MissionSegmentParams *p)
 {
     if (!Motion_ValidateParams(p) || p->kind!=MOTION_KIND_STRAIGHT) return Motion_Fail(ctx,MOTION_FAULT_CONFIG);
@@ -51,6 +103,7 @@ MissionSegmentOutput MotionStraight_Update(MissionSegmentContext *ctx, const Mis
         /* The straight trip begins HERE, after all braking/rotation. */
         ctx->phase=PHASE_STRAIGHT; ctx->phase_started_ms=in->now_ms;
         MotionDistance_Begin(&s->distance,in); MotionEdge_Reset(&s->edge);
+        s->line_yaw_deg=Motion_Yaw(ctx,in);
         s->control_ms=in->now_ms-MOTION_HEADING_PERIOD_MS;
     }
     if (ctx->phase!=PHASE_STRAIGHT) return Motion_Fail(ctx,MOTION_FAULT_CONFIG);
@@ -58,6 +111,7 @@ MissionSegmentOutput MotionStraight_Update(MissionSegmentContext *ctx, const Mis
     if (s->distance_mm>p->point_max_mm || s->distance_mm < -MOTION_REVERSE_DISTANCE_FAULT_MM)
         return Motion_Fail(ctx,MOTION_FAULT_DISTANCE);
     if ((uint32_t)(in->now_ms-ctx->phase_started_ms)>p->timeout_ms) return Motion_Fail(ctx,MOTION_FAULT_TIMEOUT);
+    if (p->follow_line) return FollowBD(ctx,in,p);
     if (fabsf(s->heading_error_deg)>MOTION_HEADING_FAULT_DEG) return Motion_Fail(ctx,MOTION_FAULT_HEADING);
     if (MotionEdge_Update(&s->edge,in,s->distance_mm,p->point_min_mm,p->point_max_mm,1U)) return Motion_Complete(ctx);
     if ((uint32_t)(in->now_ms-s->control_ms)>=MOTION_HEADING_PERIOD_MS) {
